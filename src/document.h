@@ -826,6 +826,9 @@ struct Document {
                 case WXK_BACK:  // no menu shortcut available in wxwidgets
                     if (!ctrl) return Action(A_BACKSPACE);
                     break;  // Prevent Ctrl+H from being treated as Backspace
+                case WXK_INSERT:
+                    if (!alt && !ctrl && !shift) return Action(A_ENTERGRID);
+                    break;
                 case WXK_RETURN:
                 case WXK_NUMPAD_ENTER:
                     if (alt && !ctrl) return TextNewline();
