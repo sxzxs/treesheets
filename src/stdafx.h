@@ -15,6 +15,7 @@
 #include <wx/dir.h>
 #include <wx/dnd.h>
 #include <wx/fileconf.h>
+#include <wx/listbox.h>
 #include <wx/numdlg.h>
 #include <wx/tokenzr.h>
 #include <wx/txtstrm.h>
@@ -55,7 +56,9 @@
 #include <wx/stdpaths.h>
 #include <wx/sysopt.h>
 #include <wx/taskbar.h>
+#include <wx/textentry.h>
 #include <wx/timectrl.h>
+#include <wx/treectrl.h>
 #include <wx/translation.h>
 #include <wx/uilocale.h>
 #include <wx/xml/xml.h>

@@ -464,17 +464,19 @@ struct Document {
     wxString NoThin() { return _("This operation doesn't work on thin selections."); }
     wxString NoGrid() { return _("This operation requires a cell that contains a grid."); }
 
-    wxString TextNewline() {
+    wxString TextInsert(const wxString &text) {
         if (!selected.grid) return NoSel();
         auto cell = selected.GetCell();
         if (!cell || !selected.TextEdit()) return _("only works in cell text mode");
         cell->AddUndo(this);
-        cell->text.Newline(this, selected);
+        cell->text.Insert(this, text, selected, false);
         paintscrolltoselection = true;
         canvas->Refresh();
         canvas->Update();
         return wxEmptyString;
     }
+
+    wxString TextNewline() { return TextInsert("\n"); }
 
     wxString Wheel(int dir, bool alt, bool ctrl, bool shift, bool hierarchical = true) {
         if (!dir) return wxEmptyString;
@@ -1980,7 +1982,10 @@ struct Document {
         if (!cell) return OneCell();
 
         switch (action) {
-            case A_NEXT: selected.Next(this, false); return wxEmptyString;
+            case A_NEXT:
+                if (selected.TextEdit()) return TextInsert("    ");
+                selected.Next(this, false);
+                return wxEmptyString;
             case A_PREV: selected.Next(this, true); return wxEmptyString;
 
             case A_LINK:

@@ -10,6 +10,12 @@ struct TSFrame : wxFrame {
     wxFileSystemWatcher *watcher;
     wxAuiNotebook *notebook {nullptr};
     wxAuiManager aui {this};
+    wxPanel *explorerpane {nullptr};
+    wxTreeCtrl *explorertree {nullptr};
+    wxSearchCtrl *explorersearch {nullptr};
+    wxListBox *explorerresults {nullptr};
+    wxString explorerroot;
+    vector<wxString> explorerresultpaths;
     wxBitmap line_nw;
     wxBitmap line_sw;
     wxBitmap foldicon;
@@ -26,6 +32,11 @@ struct TSFrame : wxFrame {
     int refreshhack {0};
     int refreshhackinstances {0};
     std::map<wxString, wxString> menustrings;
+
+    struct ExplorerTreeItemData : wxTreeItemData {
+        wxString path;
+        explicit ExplorerTreeItemData(const wxString &_path) : path(_path) {}
+    };
 
     TSFrame(TSApp *_app)
         : wxFrame((wxFrame *)nullptr, wxID_ANY, "TreeSheets", wxDefaultPosition, wxDefaultSize,
@@ -164,6 +175,8 @@ struct TSFrame : wxFrame {
         auto filemenu = new wxMenu();
         MyAppend(filemenu, wxID_NEW, _("&New") + "\tCTRL+N", _("Create a new document"));
         MyAppend(filemenu, wxID_OPEN, _("&Open...") + "\tCTRL+O", _("Open an existing document"));
+        MyAppend(filemenu, A_EXPLORERROOT, _("Open &Folder..."),
+                 _("Choose the folder shown in the Explorer"));
         MyAppend(filemenu, wxID_CLOSE, _("&Close") + "\tCTRL+W", _("Close current document"));
         filemenu->AppendSubMenu(recentmenu, _("&Recent files"));
         MyAppend(filemenu, wxID_SAVE, _("&Save") + "\tCTRL+S", _("Save current document"));
@@ -527,6 +540,9 @@ struct TSFrame : wxFrame {
         MyAppend(viewmenu, A_ZOOMIN, _("Zoom &In (CTRL+mousewheel)") + "\tCTRL+PGUP");
         MyAppend(viewmenu, A_ZOOMOUT, _("Zoom &Out (CTRL+mousewheel)") + "\tCTRL+PGDN");
         viewmenu->AppendSeparator();
+        MyAppend(viewmenu, A_EXPLORER, _("Explorer") + "\tCTRL+SHIFT+E",
+                 _("Toggle the file Explorer panel"));
+        viewmenu->AppendSeparator();
         MyAppend(
             viewmenu, A_NEXTFILE,
             _("&Next tab")
@@ -783,6 +799,19 @@ struct TSFrame : wxFrame {
         bool ismax;
         sys->cfg->Read("maximized", &ismax, true);
 
+        CreateExplorerPane();
+        aui.AddPane(
+            explorerpane,
+            wxAuiPaneInfo()
+                .Name("explorer")
+                .Caption(_("Explorer"))
+                .Left()
+                .Layer(1)
+                .Position(0)
+                .BestSize(FromDIP(wxSize(280, 500)))
+                .MinSize(FromDIP(wxSize(220, 180)))
+                .CloseButton(true)
+                .MaximizeButton(true));
         aui.AddPane(
             notebook,
             wxAuiPaneInfo().Name("notebook").Caption("Notebook").CenterPane().PaneBorder(false));
@@ -804,6 +833,311 @@ struct TSFrame : wxFrame {
         SetFileAssoc(app->exename);
 
         wxSafeYield();
+    }
+
+    wxString ReadExplorerRoot() {
+        auto root = sys->cfg->Read("explorerroot", wxGetCwd());
+        if (!wxDirExists(root)) root = wxGetCwd();
+        return root;
+    }
+
+    void CreateExplorerPane() {
+        explorerroot = ReadExplorerRoot();
+        explorerpane = new wxPanel(this, wxID_ANY);
+
+        auto sizer = new wxBoxSizer(wxVERTICAL);
+        auto header = new wxBoxSizer(wxHORIZONTAL);
+        auto title = new wxStaticText(explorerpane, wxID_ANY, _("Explorer"));
+        auto titlefont = title->GetFont();
+        titlefont.SetWeight(wxFONTWEIGHT_BOLD);
+        title->SetFont(titlefont);
+        header->Add(title, 1, wxALIGN_CENTER_VERTICAL | wxLEFT, FromDIP(8));
+
+        auto openfolder = new wxButton(explorerpane, wxID_ANY, _("Open Folder..."),
+                                       wxDefaultPosition, wxDefaultSize, wxBU_EXACTFIT);
+        header->Add(openfolder, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(6));
+        sizer->Add(header, 0, wxEXPAND | wxTOP | wxBOTTOM, FromDIP(6));
+
+        explorersearch = new wxSearchCtrl(explorerpane, A_EXPLORERSEARCH, wxEmptyString,
+                                          wxDefaultPosition, wxDefaultSize,
+                                          wxTE_PROCESS_ENTER);
+        explorersearch->ShowCancelButton(true);
+        explorersearch->SetDescriptiveText(_("Search files"));
+        sizer->Add(explorersearch, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(6));
+
+        explorertree = new wxTreeCtrl(explorerpane, wxID_ANY, wxDefaultPosition, wxDefaultSize,
+                                      wxTR_DEFAULT_STYLE | wxTR_LINES_AT_ROOT | wxTR_SINGLE);
+        explorerresults = new wxListBox(explorerpane, wxID_ANY);
+        explorerresults->Hide();
+        sizer->Add(explorertree, 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(4));
+        sizer->Add(explorerresults, 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(4));
+        explorerpane->SetSizer(sizer);
+        explorerpane->SetToolTip(explorerroot);
+
+        openfolder->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { ChooseExplorerRoot(); });
+        explorersearch->Bind(wxEVT_TEXT, &TSFrame::OnExplorerSearch, this);
+        explorersearch->Bind(wxEVT_TEXT_ENTER, &TSFrame::OnExplorerSearch, this);
+        explorersearch->Bind(wxEVT_SEARCHCTRL_CANCEL_BTN, [this](wxCommandEvent &) {
+            explorersearch->Clear();
+            RefreshExplorerSearch();
+        });
+        BuildExplorerTree();
+        explorertree->Bind(wxEVT_TREE_ITEM_EXPANDING, &TSFrame::OnExplorerTreeExpanding, this);
+        explorertree->Bind(wxEVT_TREE_ITEM_ACTIVATED, &TSFrame::OnExplorerTreeActivated, this);
+        explorerresults->Bind(wxEVT_LISTBOX_DCLICK, &TSFrame::OnExplorerResultActivated, this);
+    }
+
+    void SetExplorerRoot(const wxString &root) {
+        if (!wxDirExists(root)) return;
+        explorerroot = root;
+        sys->cfg->Write("explorerroot", explorerroot);
+        BuildExplorerTree();
+        if (explorerpane) explorerpane->SetToolTip(explorerroot);
+        RefreshExplorerSearch();
+    }
+
+    void ChooseExplorerRoot() {
+        wxDirDialog dialog(this, _("Choose Explorer folder"), explorerroot,
+                           wxDD_DEFAULT_STYLE | wxDD_DIR_MUST_EXIST);
+        if (dialog.ShowModal() == wxID_OK) {
+            if (explorersearch) explorersearch->Clear();
+            SetExplorerRoot(dialog.GetPath());
+            ShowExplorer();
+        }
+    }
+
+    void ShowExplorer() {
+        auto &pane = aui.GetPane("explorer");
+        if (!pane.IsOk()) return;
+        pane.Show(true);
+        aui.Update();
+    }
+
+    void ToggleExplorer() {
+        auto &pane = aui.GetPane("explorer");
+        if (!pane.IsOk()) return;
+        pane.Show(!pane.IsShown());
+        aui.Update();
+    }
+
+    bool ShouldSkipExplorerDir(const wxString &dirname) const {
+        auto lower = dirname.Lower();
+        return lower == ".git" || lower == ".hg" || lower == ".svn" || lower == ".vs" ||
+               lower == "_build" || lower == "_install" || lower == "build" ||
+               lower == "node_modules";
+    }
+
+    bool IsExplorerVisibleFile(const wxString &path) const {
+        return wxFileName(path).GetExt().Lower() == "cts";
+    }
+
+    wxString ExplorerPathFromTreeItem(const wxTreeItemId &item) const {
+        if (!explorertree || !item.IsOk()) return wxEmptyString;
+        auto data = static_cast<ExplorerTreeItemData *>(explorertree->GetItemData(item));
+        if (data) return data->path;
+        return wxEmptyString;
+    }
+
+    bool ExplorerTreeItemIsDummy(const wxTreeItemId &item) const {
+        return ExplorerPathFromTreeItem(item).IsEmpty();
+    }
+
+    bool ExplorerDirHasVisibleChildren(const wxString &directory) const {
+        wxDir dir(directory);
+        if (!dir.IsOpened()) return false;
+
+        wxString entry;
+        bool more = dir.GetFirst(&entry, wxEmptyString, wxDIR_FILES | wxDIR_DIRS);
+        while (more) {
+            wxFileName entrypath(directory, entry);
+            auto fullpath = entrypath.GetFullPath();
+            if (wxDirExists(fullpath)) {
+                if (!ShouldSkipExplorerDir(entry)) return true;
+            } else if (wxFileExists(fullpath) && IsExplorerVisibleFile(fullpath)) {
+                return true;
+            }
+            more = dir.GetNext(&entry);
+        }
+        return false;
+    }
+
+    wxTreeItemId AppendExplorerTreeItem(const wxTreeItemId &parent, const wxString &path) {
+        wxFileName filename(path);
+        auto label = filename.GetFullName();
+        if (label.IsEmpty()) label = path;
+
+        wxTreeItemId item;
+        if (parent.IsOk())
+            item = explorertree->AppendItem(parent, label, -1, -1, new ExplorerTreeItemData(path));
+        else
+            item = explorertree->AddRoot(label, -1, -1, new ExplorerTreeItemData(path));
+
+        if (wxDirExists(path) && ExplorerDirHasVisibleChildren(path))
+            explorertree->AppendItem(item, "...", -1, -1, new ExplorerTreeItemData(wxEmptyString));
+        return item;
+    }
+
+    void LoadExplorerTreeChildren(const wxTreeItemId &item) {
+        if (!explorertree || !item.IsOk()) return;
+        auto directory = ExplorerPathFromTreeItem(item);
+        if (directory.IsEmpty() || !wxDirExists(directory)) return;
+
+        explorertree->DeleteChildren(item);
+        wxDir dir(directory);
+        if (!dir.IsOpened()) return;
+
+        vector<wxString> directories;
+        vector<wxString> files;
+        wxString entry;
+        bool more = dir.GetFirst(&entry, wxEmptyString, wxDIR_FILES | wxDIR_DIRS);
+        while (more) {
+            wxFileName entrypath(directory, entry);
+            auto fullpath = entrypath.GetFullPath();
+            if (wxDirExists(fullpath)) {
+                if (!ShouldSkipExplorerDir(entry)) directories.push_back(fullpath);
+            } else if (wxFileExists(fullpath) && IsExplorerVisibleFile(fullpath)) {
+                files.push_back(fullpath);
+            }
+            more = dir.GetNext(&entry);
+        }
+
+        auto sortpaths = [](const wxString &a, const wxString &b) {
+            return wxFileName(a).GetFullName().CmpNoCase(wxFileName(b).GetFullName()) < 0;
+        };
+        sort(directories.begin(), directories.end(), sortpaths);
+        sort(files.begin(), files.end(), sortpaths);
+
+        for (const auto &path : directories) AppendExplorerTreeItem(item, path);
+        for (const auto &path : files) AppendExplorerTreeItem(item, path);
+    }
+
+    bool ExplorerTreeHasDummyChild(const wxTreeItemId &item) const {
+        if (!explorertree || !item.IsOk() || !explorertree->ItemHasChildren(item)) return false;
+        wxTreeItemIdValue cookie;
+        auto child = explorertree->GetFirstChild(item, cookie);
+        return child.IsOk() && ExplorerTreeItemIsDummy(child);
+    }
+
+    void BuildExplorerTree() {
+        if (!explorertree) return;
+        explorertree->DeleteAllItems();
+        auto root = AppendExplorerTreeItem(wxTreeItemId(), explorerroot);
+        LoadExplorerTreeChildren(root);
+        explorertree->Expand(root);
+        explorertree->SelectItem(root);
+    }
+
+    wxString ExplorerDisplayPath(const wxString &path) const {
+        wxFileName filename(path);
+        if (filename.MakeRelativeTo(explorerroot)) return filename.GetFullPath();
+        return path;
+    }
+
+    void CollectExplorerMatches(const wxString &directory, const wxString &needle, size_t limit) {
+        if (explorerresultpaths.size() >= limit) return;
+        wxDir dir(directory);
+        if (!dir.IsOpened()) return;
+
+        wxString entry;
+        bool more = dir.GetFirst(&entry, wxEmptyString, wxDIR_FILES | wxDIR_DIRS);
+        while (more && explorerresultpaths.size() < limit) {
+            wxFileName entrypath(directory, entry);
+            auto fullpath = entrypath.GetFullPath();
+            if (wxDirExists(fullpath)) {
+                if (!ShouldSkipExplorerDir(entry)) CollectExplorerMatches(fullpath, needle, limit);
+            } else if (wxFileExists(fullpath) && IsExplorerVisibleFile(fullpath)) {
+                auto relpath = ExplorerDisplayPath(fullpath);
+                auto haystack = relpath.Lower();
+                if (haystack.Find(needle) != wxNOT_FOUND) explorerresultpaths.push_back(fullpath);
+            }
+            more = dir.GetNext(&entry);
+        }
+    }
+
+    void RefreshExplorerSearch() {
+        if (!explorersearch || !explorertree || !explorerresults) return;
+
+        auto needle = explorersearch->GetValue();
+        needle.Trim(true).Trim(false);
+        if (needle.IsEmpty()) {
+            explorerresultpaths.clear();
+            explorerresults->Clear();
+            explorerresults->Hide();
+            explorertree->Show();
+            explorerpane->Layout();
+            return;
+        }
+
+        needle.MakeLower();
+        explorerresultpaths.clear();
+        explorerresults->Clear();
+        const size_t resultlimit = 1000;
+        CollectExplorerMatches(explorerroot, needle, resultlimit);
+        sort(explorerresultpaths.begin(), explorerresultpaths.end(),
+             [this](const wxString &a, const wxString &b) {
+                 return ExplorerDisplayPath(a).CmpNoCase(ExplorerDisplayPath(b)) < 0;
+             });
+
+        wxArrayString labels;
+        for (const auto &path : explorerresultpaths) labels.Add(ExplorerDisplayPath(path));
+        if (labels.IsEmpty()) labels.Add(_("No files found"));
+        if (explorerresultpaths.size() >= resultlimit) {
+            labels.Add(wxString::Format(_("Showing first %d matches"),
+                                        static_cast<int>(explorerresultpaths.size())));
+        }
+        explorerresults->Append(labels);
+        explorertree->Hide();
+        explorerresults->Show();
+        explorerpane->Layout();
+    }
+
+    void OpenExplorerPath(const wxString &path) {
+        if (path.IsEmpty()) return;
+        if (wxDirExists(path)) {
+            SetExplorerRoot(path);
+            return;
+        }
+        if (!wxFileExists(path)) {
+            SetStatus(_("File does not exist."));
+            return;
+        }
+
+        wxFileName filename(path);
+        auto fullpath = filename.GetFullPath();
+        if (filename.GetExt().Lower() == "cts") {
+            SetStatus(sys->Open(fullpath));
+        } else if (!wxLaunchDefaultApplication(fullpath)) {
+            SetStatus(_("File could not be opened."));
+        }
+    }
+
+    void OnExplorerSearch(wxCommandEvent &) { RefreshExplorerSearch(); }
+
+    void OnExplorerTreeExpanding(wxTreeEvent &event) {
+        auto item = event.GetItem();
+        if (ExplorerTreeHasDummyChild(item)) LoadExplorerTreeChildren(item);
+        event.Skip();
+    }
+
+    void OnExplorerTreeActivated(wxTreeEvent &event) {
+        auto item = event.GetItem();
+        auto path = ExplorerPathFromTreeItem(item);
+        if (path.IsEmpty()) return;
+        if (wxDirExists(path)) {
+            if (ExplorerTreeHasDummyChild(item)) LoadExplorerTreeChildren(item);
+            if (explorertree->IsExpanded(item))
+                explorertree->Collapse(item);
+            else
+                explorertree->Expand(item);
+            return;
+        }
+        OpenExplorerPath(path);
+    }
+
+    void OnExplorerResultActivated(wxCommandEvent &event) {
+        auto selection = event.GetSelection();
+        if (selection >= 0 && static_cast<size_t>(selection) < explorerresultpaths.size())
+            OpenExplorerPath(explorerresultpaths[selection]);
     }
 
     wxArrayString GetToolbarPaneNames() {
@@ -1046,12 +1380,22 @@ struct TSFrame : wxFrame {
     // event handling functions
 
     void OnMenu(wxCommandEvent &ce) {
-        wxTextCtrl *tc;
+        wxTextEntryBase *tc = nullptr;
+        wxWindow *tcwindow = nullptr;
         auto canvas = GetCurrentTab();
-        if ((tc = filter) && filter == wxWindow::FindFocus() ||
-            (tc = replaces) && replaces == wxWindow::FindFocus()) {
+        auto focus = wxWindow::FindFocus();
+        auto CheckTextEntryFocus = [&](wxWindow *window, wxTextEntryBase *entry) {
+            if (!window || !entry || !focus) return false;
+            if (window != focus && !window->IsDescendant(focus)) return false;
+            tc = entry;
+            tcwindow = window;
+            return true;
+        };
+        if (CheckTextEntryFocus(filter, filter) || CheckTextEntryFocus(replaces, replaces) ||
+            CheckTextEntryFocus(explorersearch, explorersearch)) {
             long from, to;
             tc->GetSelection(&from, &to);
+            auto end = tc->GetLastPosition();
             switch (ce.GetId()) {
                 #if defined(__WXMSW__) || defined(__WXMAC__)
                 // FIXME: have to emulate this behavior on Windows and Mac because menu always captures these events (??)
@@ -1066,12 +1410,12 @@ struct TSFrame : wxFrame {
                 case A_RIGHT:
                     if (from != to)
                         tc->SetInsertionPoint(to);
-                    else if (to < tc->GetLineLength(0))
+                    else if (to < end)
                         tc->SetInsertionPoint(to + 1);
                     return;
 
                 case A_SHOME: tc->SetSelection(0, to); return;
-                case A_SEND: tc->SetSelection(from, 1000); return;
+                case A_SEND: tc->SetSelection(from, end); return;
 
                 case A_SCLEFT:
                 case A_SLEFT:
@@ -1079,18 +1423,28 @@ struct TSFrame : wxFrame {
                     return;
                 case A_SCRIGHT:
                 case A_SRIGHT:
-                    if (to < tc->GetLineLength(0)) tc->SetSelection(from, to + 1);
+                    if (to < end) tc->SetSelection(from, to + 1);
                     return;
 
-                case A_BACKSPACE: tc->Remove(from - (from == to), to); return;
-                case A_DELETE: tc->Remove(from, to + (from == to)); return;
+                case A_BACKSPACE:
+                    if (from != to)
+                        tc->Remove(from, to);
+                    else if (from > 0)
+                        tc->Remove(from - 1, to);
+                    return;
+                case A_DELETE:
+                    if (from != to)
+                        tc->Remove(from, to);
+                    else if (to < end)
+                        tc->Remove(from, to + 1);
+                    return;
                 case A_HOME: tc->SetSelection(0, 0); return;
-                case A_END: tc->SetSelection(1000, 1000); return;
-                case wxID_SELECTALL: tc->SetSelection(0, 1000); return;
+                case A_END: tc->SetSelection(end, end); return;
+                case wxID_SELECTALL: tc->SelectAll(); return;
                 #endif
                 #ifdef __WXMSW__
                 case A_ENTERCELL: {
-                    if (tc == filter) {
+                    if (tcwindow == filter) {
                         // OnSearchEnter equivalent implementation for MSW
                         // as EVT_TEXT_ENTER event is not generated.
                         if (sys->searchstring.IsEmpty()) {
@@ -1098,7 +1452,7 @@ struct TSFrame : wxFrame {
                         } else {
                             canvas->doc->Action(A_SEARCHNEXT);
                         }
-                    } else if (tc == replaces) {
+                    } else if (tcwindow == replaces) {
                         // OnReplaceEnter equivalent implementation for MSW
                         // as EVT_TEXT_ENTER event is not generated.
                         canvas->doc->Action(A_REPLACEONCEJ);
@@ -1108,7 +1462,11 @@ struct TSFrame : wxFrame {
                 #endif
                 case A_CANCELEDIT:
                     tc->Clear();
-                    canvas->SetFocus();
+                    if (tcwindow == explorersearch) {
+                        RefreshExplorerSearch();
+                    } else {
+                        canvas->SetFocus();
+                    }
                     return;
             }
         }
@@ -1118,6 +1476,12 @@ struct TSFrame : wxFrame {
         };
         switch (ce.GetId()) {
             case A_NOP: break;
+            case A_EXPLORER:
+                ToggleExplorer();
+                break;
+            case A_EXPLORERROOT:
+                ChooseExplorerRoot();
+                break;
 
             case A_ALEFT: canvas->CursorScroll(-g_scrollratecursor, 0); break;
             case A_ARIGHT: canvas->CursorScroll(g_scrollratecursor, 0); break;

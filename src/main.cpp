@@ -126,6 +126,9 @@ enum {
     A_PROGRESSCELL,  // see
                      // https://github.com/aardappel/treesheets/issues/139#issuecomment-544167524
     A_TEXTNEWLINE,
+    A_EXPLORER,
+    A_EXPLORERROOT,
+    A_EXPLORERSEARCH,
     A_CELLCOLOR,
     A_TEXTCOLOR,
     A_BORDCOLOR,
