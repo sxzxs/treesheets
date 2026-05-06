@@ -464,6 +464,18 @@ struct Document {
     wxString NoThin() { return _("This operation doesn't work on thin selections."); }
     wxString NoGrid() { return _("This operation requires a cell that contains a grid."); }
 
+    wxString TextNewline() {
+        if (!selected.grid) return NoSel();
+        auto cell = selected.GetCell();
+        if (!cell || !selected.TextEdit()) return _("only works in cell text mode");
+        cell->AddUndo(this);
+        cell->text.Newline(this, selected);
+        paintscrolltoselection = true;
+        canvas->Refresh();
+        canvas->Update();
+        return wxEmptyString;
+    }
+
     wxString Wheel(int dir, bool alt, bool ctrl, bool shift, bool hierarchical = true) {
         if (!dir) return wxEmptyString;
         if (alt) {
@@ -813,6 +825,8 @@ struct Document {
                     if (!ctrl) return Action(A_BACKSPACE);
                     break;  // Prevent Ctrl+H from being treated as Backspace
                 case WXK_RETURN:
+                case WXK_NUMPAD_ENTER:
+                    if (alt && !ctrl) return TextNewline();
                     return Action(shift  ? ctrl ? A_ENTERGRIDN : A_ENTERGRID
                                   : ctrl ? A_ENTERCELL_JUMPTOSTART
                                          : A_ENTERCELL);
@@ -1622,6 +1636,7 @@ struct Document {
                 }
                 return wxEmptyString;
             }
+            case A_TEXTNEWLINE: return TextNewline();
 
             case A_IMAGE: {
                 if (!(cell = selected.ThinExpand(this))) return OneCell();
@@ -2139,7 +2154,13 @@ struct Document {
         if (textdataobject.GetText() != wxEmptyString) {
             Cell *cell = selected.ThinExpand(this);
             auto text = textdataobject.GetText();
-            if ((sys->clipboardcopy == text) && sys->cellclipboard) {
+            if (!cell) return;
+            if (selected.TextEdit()) {
+                text.Replace("\r\n", "\n");
+                text.Replace("\r", "\n");
+                cell->AddUndo(this);
+                PasteSingleText(cell, text);
+            } else if ((sys->clipboardcopy == text) && sys->cellclipboard) {
                 cell->Paste(this, sys->cellclipboard.get(), selected);
             } else {
                 const wxArrayString &lines = wxStringTokenize(text, LINE_SEPARATOR);

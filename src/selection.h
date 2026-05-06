@@ -215,12 +215,14 @@ class Selection {
                                 int laststart, lastlen;
                                 int nextoffset = -1;
                                 for (int l = 0;; l++) {
-                                    int start = i;
-                                    auto ls = text.GetLine(i, maxcolwidth);
+                                    Text::Line line;
+                                    if (!text.GetLine(i, maxcolwidth, line)) break;
+                                    int start = line.start;
+                                    auto ls = line.text;
                                     auto len = static_cast<int>(ls.Len());
-                                    int end = start + len;
+                                    int end = line.end;
 
-                                    if (len && nextoffset >= 0) {
+                                    if (nextoffset >= 0) {
                                         cursor = cursorend =
                                             start + (nextoffset > len ? len : nextoffset);
                                         intracell = false;
@@ -245,7 +247,6 @@ class Selection {
                                     laststart = start;
                                     lastlen = len;
 
-                                    if (!len) break;
                                 }
                             } else {
                                 intracell = false;

@@ -118,6 +118,12 @@ struct TSFrame : wxFrame {
             #define ALTORCTRL "CTRL"
         #endif
 
+        #ifdef __WXMAC__
+            #define PROGRESSCELLKEY CTRLORALT "+ENTER"
+        #else
+            #define PROGRESSCELLKEY "CTRL+ALT+ENTER"
+        #endif
+
         auto expmenu = new wxMenu();
         MyAppend(expmenu, A_EXPXML, _("&XML..."),
                  _("Export the current view as XML (which can also be reimported without losing structure)"));
@@ -302,8 +308,10 @@ struct TSFrame : wxFrame {
             MyAppend(
                 temenu, A_ENTERCELL_JUMPTOSTART,
                 _("...and progress to the first cell in the new row") + "\t" ALTORCTRL "+ENTER");
+            MyAppend(temenu, A_TEXTNEWLINE,
+                     _("Insert line break in cell text (Alt+Enter)"));
             MyAppend(temenu, A_PROGRESSCELL,
-                     _("...and progress to the next cell on the right") + "\t" CTRLORALT "+ENTER");
+                     _("...and progress to the next cell on the right") + "\t" PROGRESSCELLKEY);
             MyAppend(temenu, A_CANCELEDIT, _("Cancel text edits") + "\tESC");
 
             auto stmenu = new wxMenu();

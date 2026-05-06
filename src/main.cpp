@@ -125,6 +125,7 @@ enum {
     A_ENTERCELL_JUMPTOEND,
     A_PROGRESSCELL,  // see
                      // https://github.com/aardappel/treesheets/issues/139#issuecomment-544167524
+    A_TEXTNEWLINE,
     A_CELLCOLOR,
     A_TEXTCOLOR,
     A_BORDCOLOR,

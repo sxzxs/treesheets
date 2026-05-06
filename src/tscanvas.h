@@ -3,6 +3,7 @@ struct TSCanvas : public wxScrolledCanvas {
     unique_ptr<Document> doc {nullptr};
     int mousewheelaccum {0};
     bool lastrmbwaswithctrl {false};
+    bool altenterhandled {false};
     wxPoint lastmousepos;
 
     TSCanvas(TSFrame *fr, wxWindow *parent, const wxSize &size = wxDefaultSize)
@@ -120,8 +121,39 @@ struct TSCanvas : public wxScrolledCanvas {
         Refresh();
     }
 
-    void OnKeyDown(wxKeyEvent &ce) { ce.Skip(); }
+    bool IsAltEnter(wxKeyEvent &ce) {
+        auto key = ce.GetKeyCode();
+        return ce.AltDown() && !ce.CmdDown() &&
+               (key == WXK_RETURN || key == WXK_NUMPAD_ENTER);
+    }
+
+    bool HandleAltEnter(wxKeyEvent &ce) {
+        if (!IsAltEnter(ce)) return false;
+        if (altenterhandled) return true;
+        altenterhandled = true;
+        bool unprocessed = false;
+        sys->frame->SetStatus(doc->Key(WXK_NONE, ce.GetKeyCode(), ce.AltDown(), ce.CmdDown(),
+                                       ce.ShiftDown(), unprocessed));
+        if (unprocessed) ce.Skip();
+        return !unprocessed;
+    }
+
+    void OnCharHook(wxKeyEvent &ce) {
+        if (HandleAltEnter(ce)) return;
+        ce.Skip();
+    }
+
+    void OnKeyDown(wxKeyEvent &ce) {
+        if (HandleAltEnter(ce)) return;
+        ce.Skip();
+    }
+    void OnKeyUp(wxKeyEvent &ce) {
+        auto key = ce.GetKeyCode();
+        if (key == WXK_RETURN || key == WXK_NUMPAD_ENTER) altenterhandled = false;
+        ce.Skip();
+    }
     void OnChar(wxKeyEvent &ce) {
+        if (HandleAltEnter(ce)) return;
         /*
         if (sys->insidefiledialog)
         {
@@ -134,6 +166,7 @@ struct TSCanvas : public wxScrolledCanvas {
             // Alt+[Shift]+cursor (scrolling) don't work. The 128 makes sure unicode entry on e.g.
             // Polish keyboards still works. (on Linux in particular).
             if ((ce.GetModifiers() == wxMOD_ALT || ce.GetModifiers() == (wxMOD_ALT | wxMOD_SHIFT)) &&
+                ce.GetKeyCode() != WXK_RETURN && ce.GetKeyCode() != WXK_NUMPAD_ENTER &&
                 (ce.GetUnicodeKey() < 128)) {
                 ce.Skip();
                 return;

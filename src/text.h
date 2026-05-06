@@ -90,11 +90,25 @@ struct Text {
     }
 
     auto IsWord(wxChar c) { return wxIsalnum(c) || wxStrchr(L"_\"\'()", c) || wxIspunct(c); }
-    auto GetLinePart(int &currentpos, int breakpos, int limitpos) {
+    bool IsLineBreak(wxChar c) { return c == '\n' || c == '\r'; }
+    int NextAfterLineBreak(int pos) {
+        return t[pos] == '\r' && pos + 1 < static_cast<int>(t.Len()) && t[pos + 1] == '\n'
+                   ? pos + 2
+                   : pos + 1;
+    }
+
+    struct Line {
+        wxString text;
+        int start {0};
+        int end {0};
+    };
+
+    auto GetLinePart(int &currentpos, int breakpos, int limitpos, Line &line) {
         auto startpos = currentpos;
         currentpos = breakpos;
 
-        for (auto j = t.begin() + startpos; (j != t.end()) && !wxIsspace(*j) && !IsWord(*j); j++) {
+        for (auto j = t.begin() + startpos; currentpos < limitpos && !wxIsspace(*j) && !IsWord(*j);
+             j++) {
             currentpos++;
             breakpos++;
         }
@@ -105,7 +119,8 @@ struct Text {
             breakpos++;
         }  // special case: if punctuation followed by quote, quote is meant to be part of word
 
-        for (auto k = t.begin() + currentpos; (k != t.end()) && wxIsspace(*k); k++) {
+        for (auto k = t.begin() + currentpos;
+             currentpos < limitpos && wxIsspace(*k) && !IsLineBreak(*k); k++) {
             // gobble spaces, but do not copy them
             currentpos++;
             if (currentpos == limitpos)
@@ -120,29 +135,54 @@ struct Text {
 
         ASSERT(startpos != currentpos);
 
-        return t.Mid(startpos, breakpos - startpos);
+        line.start = startpos;
+        line.end = breakpos;
+        line.text = t.Mid(startpos, breakpos - startpos);
+        return true;
     }
 
-    wxString GetLine(auto &i, auto maxcolwidth) {
+    bool GetLine(int &i, int maxcolwidth, Line &line) {
         auto l = static_cast<int>(t.Len());
 
-        if (i >= l) return wxEmptyString;
+        if (i > l) return false;
+        if (i == l) {
+            if (l && IsLineBreak(t[l - 1])) {
+                line.start = line.end = l;
+                line.text.clear();
+                i = l + 1;
+                return true;
+            }
+            return false;
+        }
 
-        if (!i && l <= maxcolwidth) {
-            i = l;
-            return t;
-        }  // subsumed by the case below, but this case happens 90% of the time, so more optimal
-        if (l - i <= maxcolwidth) return GetLinePart(i, l, l);
+        maxcolwidth = max(1, maxcolwidth);
+
+        auto hardbreak = -1;
+        for (auto p = i; p < l; p++)
+            if (IsLineBreak(t[p])) {
+                hardbreak = p;
+                break;
+            }
+        auto limit = hardbreak >= 0 ? hardbreak : l;
+        auto len = limit - i;
+
+        if (len <= maxcolwidth) {
+            line.start = i;
+            line.end = limit;
+            line.text = t.Mid(i, len);
+            i = hardbreak >= 0 ? NextAfterLineBreak(hardbreak) : limit;
+            return true;
+        }
 
         for (auto p = i + maxcolwidth; p >= i; p--)
-            if (!IsWord(t[p])) return GetLinePart(i, p, l);
+            if (!IsWord(t[p])) return GetLinePart(i, p, limit, line);
 
         // A single word is > maxcolwidth. We split it up anyway.
         // This happens with long urls and e.g. Japanese text without spaces.
         // Should really do proper unicode linebreaking instead (see libunibreak),
         // but for now this is better than the old code below which allowed for arbitrary long
         // words.
-        return GetLinePart(i, min(i + maxcolwidth, l), l);
+        return GetLinePart(i, min(i + maxcolwidth, limit), limit, line);
 
         // for(int p = i+maxcolwidth; p<l;  p++) if (!IsWord(t[p])) return GetLinePart(i, p, l);  //
         // we arrive here only
@@ -154,12 +194,16 @@ struct Text {
         sx = sy = 0;
         auto i = 0;
         for (;;) {
-            auto curl = GetLine(i, maxcolwidth);
-            if (!curl.Len()) break;
+            Line line;
+            if (!GetLine(i, maxcolwidth, line)) break;
+            auto &curl = line.text;
             int x, y;
             if (tiny) {
                 x = static_cast<int>(curl.Len());
                 y = 1;
+            } else if (curl.empty()) {
+                x = 0;
+                y = dc.GetCharHeight();
             } else
                 dc.GetTextExtent(curl, &x, &y);
             sx = max(x, sx);
@@ -208,8 +252,9 @@ struct Text {
                 dc.SetPen(sys->pen_tinytext);
         }
         for (;;) {
-            auto curl = GetLine(i, maxcolwidth);
-            if (!curl.Len()) break;
+            Line line;
+            if (!GetLine(i, maxcolwidth, line)) break;
+            auto &curl = line.text;
             if (cell->tiny) {
                 if (sys->fastrender) {
                     dc.DrawLine(bx + ixs, by + lines * h, bx + ixs + static_cast<int>(curl.Len()),
@@ -266,8 +311,14 @@ struct Text {
         wxString ls;
 
         loop(l, line + 1) {
-            linestart = i;
-            ls = GetLine(i, maxcolwidth);
+            Line lineinfo;
+            if (!GetLine(i, maxcolwidth, lineinfo)) {
+                linestart = static_cast<int>(t.Len());
+                ls.clear();
+                break;
+            }
+            linestart = lineinfo.start;
+            ls = lineinfo.text;
         }
 
         for (;;) {
@@ -290,10 +341,12 @@ struct Text {
         {
             auto i = 0;
             for (auto l = 0;; l++) {
-                auto start = i;
-                auto ls = GetLine(i, maxcolwidth);
+                Line line;
+                if (!GetLine(i, maxcolwidth, line)) break;
+                auto start = line.start;
+                auto ls = line.text;
                 auto len = static_cast<int>(ls.Len());
-                auto end = start + len;
+                auto end = line.end;
 
                 if (s.cursor != s.cursorend) {
                     if (s.cursor <= end && s.cursorend >= start) {
@@ -320,8 +373,6 @@ struct Text {
                     HintIMELocation(doc, startx, starty, h - 2, stylebits);
                     break;
                 }
-
-                if (!len) break;
             }
         }
     }
@@ -381,6 +432,11 @@ struct Text {
         ins += k;
         Insert(doc, ins, s, false);
     }
+    void Newline(Document *doc, Selection &s) {
+        wxString ins;
+        ins += '\n';
+        Insert(doc, ins, s, false);
+    }
 
     void Delete(Selection &s) {
         if (!RangeSelRemove(s))
@@ -435,10 +491,10 @@ struct Text {
         auto cw = cell->ColWidth();
         auto findwhere = home ? s.cursor : s.cursorend;
         for (;;) {
-            auto start = i;
-            auto curl = GetLine(i, cw);
-            if (!curl.Len()) break;
-            auto end = i == t.Len() ? i : i - 1;
+            Line line;
+            if (!GetLine(i, cw, line)) break;
+            auto start = line.start;
+            auto end = line.end;
             if (findwhere >= start && findwhere <= end) {
                 s.cursor = s.cursorend = home ? start : end;
                 break;
