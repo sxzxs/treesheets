@@ -923,7 +923,6 @@ struct TSFrame : wxFrame {
         explorertree->Bind(wxEVT_TREE_ITEM_EXPANDING, &TSFrame::OnExplorerTreeExpanding, this);
         explorertree->Bind(wxEVT_TREE_ITEM_ACTIVATED, &TSFrame::OnExplorerTreeActivated, this);
         explorertree->Bind(wxEVT_TREE_ITEM_RIGHT_CLICK, &TSFrame::OnExplorerTreeContext, this);
-        explorertree->Bind(wxEVT_CONTEXT_MENU, &TSFrame::OnExplorerPaneContext, this);
         explorertree->Bind(wxEVT_KEY_DOWN, &TSFrame::OnExplorerKeyDown, this);
         explorerresults->Bind(wxEVT_LISTBOX_DCLICK, &TSFrame::OnExplorerResultActivated, this);
         explorerresults->Bind(wxEVT_CONTEXT_MENU, &TSFrame::OnExplorerResultsContext, this);
@@ -1028,7 +1027,7 @@ struct TSFrame : wxFrame {
     }
 
     bool IsExplorerVisibleFile(const wxString &path) const {
-        return !path.IsEmpty();
+        return wxFileName(path).GetExt().Lower() == "cts";
     }
 
     wxString ExplorerPathFromTreeItem(const wxTreeItemId &item) const {
@@ -1622,11 +1621,6 @@ struct TSFrame : wxFrame {
         }
     }
 
-    void OpenExplorerPathInSystem(const wxString &path) {
-        if (path.IsEmpty()) return;
-        if (!wxLaunchDefaultApplication(path)) SetStatus(_("File or folder could not be opened."));
-    }
-
     void RevealExplorerPathInSystem(const wxString &path) {
         if (path.IsEmpty()) return;
         #ifdef __WXMSW__
@@ -1650,11 +1644,9 @@ struct TSFrame : wxFrame {
         auto isroot = NormalizeExplorerPath(explorercontextpath) == NormalizeExplorerDir(explorerroot);
 
         wxMenu menu;
-        auto open = menu.Append(A_EXPLOREROPEN, isdir ? _("Open as Explorer Root") : _("Open"));
+        auto open = menu.Append(A_EXPLOREROPEN, isdir ? _("Use as Explorer Root") : _("Open"));
         open->Enable(isdir || isfile);
-        auto opensystem = menu.Append(A_EXPLOREROPENSYSTEM, _("Open in System"));
-        opensystem->Enable(isdir || isfile);
-        auto reveal = menu.Append(A_EXPLORERREVEAL, _("Reveal in System"));
+        auto reveal = menu.Append(A_EXPLORERREVEAL, _("Show in File Explorer"));
         reveal->Enable(isdir || isfile);
         menu.AppendSeparator();
         menu.Append(A_EXPLORERNEWFILE, _("New File..."));
@@ -1666,9 +1658,7 @@ struct TSFrame : wxFrame {
         auto del = menu.Append(A_EXPLORERDELETE, _("Delete") + "\tDel");
         del->Enable((isdir || isfile) && !isroot);
         menu.AppendSeparator();
-        auto setroot = menu.Append(A_EXPLORERSETROOT, _("Set as Explorer Root"));
-        setroot->Enable(isdir);
-        auto parent = menu.Append(A_EXPLOREROPENPARENT, _("Open Parent as Explorer Root"));
+        auto parent = menu.Append(A_EXPLOREROPENPARENT, _("Use Parent as Explorer Root"));
         parent->Enable(!isroot && (isdir || isfile));
         menu.AppendSeparator();
         menu.Append(A_EXPLORERCOPYPATH, _("Copy Path"));
@@ -1722,7 +1712,8 @@ struct TSFrame : wxFrame {
         PopupExplorerContextMenu(ExplorerSelectedPath());
     }
 
-    void OnExplorerPaneContext(wxContextMenuEvent &) {
+    void OnExplorerPaneContext(wxContextMenuEvent &event) {
+        if (event.GetEventObject() != explorerpane) return;
         PopupExplorerContextMenu(ExplorerSelectedPath());
     }
 
@@ -2117,10 +2108,6 @@ struct TSFrame : wxFrame {
                 OpenExplorerPath(explorercontextpath.IsEmpty() ? ExplorerSelectedPath()
                                                                : explorercontextpath);
                 break;
-            case A_EXPLOREROPENSYSTEM:
-                OpenExplorerPathInSystem(explorercontextpath.IsEmpty() ? ExplorerSelectedPath()
-                                                                       : explorercontextpath);
-                break;
             case A_EXPLORERNEWFILE:
                 ExplorerNewFile();
                 break;
@@ -2141,9 +2128,6 @@ struct TSFrame : wxFrame {
                 break;
             case A_EXPLORERCOLLAPSEALL:
                 CollapseExplorerTree();
-                break;
-            case A_EXPLORERSETROOT:
-                if (wxDirExists(explorercontextpath)) SetExplorerRoot(explorercontextpath);
                 break;
             case A_EXPLOREROPENPARENT: {
                 auto path = explorercontextpath.IsEmpty() ? ExplorerSelectedPath() : explorercontextpath;
