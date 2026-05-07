@@ -1,9 +1,9 @@
-File format spec for TreeSheets .cts files, version 23. This should be enough for a programmer to write an importer/exporter.
+File format spec for TreeSheets .cts files, version 26. This should be enough for a programmer to write an importer/exporter.
 
 struct File     // not really a struct, i.e. no alignment, read an element at a time
 {
     char magic[4] = "TSFF";
-    char version = 23;
+    char version = 26;
     // TreeSheets saves the selection and the zoom level when the file is saved.
     int xs; // xs is the number of cells within the selection in x direction
     int ys; // ys is the number of cells within the selection in y direction
@@ -37,6 +37,9 @@ struct Cell
     uint cellcolor;
     uint textcolor;
     uchar drawstyle;    // enum { DS_GRID, DS_BLOBSHIER, DS_BLOBLINE };
+    String note;        // version 25+
+    int mergexs;        // version 26+. 0 means this is covered by another merged cell.
+    int mergeys;        // version 26+. 0 means this is covered by another merged cell.
     uchar cellcontents; // enum { TS_TEXT = 0, TS_GRID, TS_BOTH, TS_NEITHER };
     // The first cell that is within the selection is marked with the highest bit set to 1 (1 x x x x x x x) in cellcontents.
     if (TS_TEXT or TS_BOTH)

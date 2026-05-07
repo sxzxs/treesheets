@@ -1,6 +1,6 @@
 #include "stdafx.h"
 
-static const auto TS_VERSION = 25;
+static const auto TS_VERSION = 26;
 static const auto g_grid_margin = 1;
 static const auto g_cell_margin = 2;
 static const auto g_margin_extra = 2;  // TODO, could make this configurable: 0/2/4/6
@@ -129,6 +129,23 @@ enum {
     A_EXPLORER,
     A_EXPLORERROOT,
     A_EXPLORERSEARCH,
+    A_EXPLOREROPEN,
+    A_EXPLOREROPENSYSTEM,
+    A_EXPLORERNEWFILE,
+    A_EXPLORERNEWFOLDER,
+    A_EXPLORERRENAME,
+    A_EXPLORERDELETE,
+    A_EXPLORERDUPLICATE,
+    A_EXPLORERREFRESH,
+    A_EXPLORERCOLLAPSEALL,
+    A_EXPLORERSETROOT,
+    A_EXPLOREROPENPARENT,
+    A_EXPLORERREVEAL,
+    A_EXPLORERCOPYPATH,
+    A_EXPLORERCOPYRELPATH,
+    A_EXPLORERHIDE,
+    A_EXPLORERAUTOHIDE,
+    A_EXPLORERREVEALACTIVE,
     A_CELLCOLOR,
     A_TEXTCOLOR,
     A_BORDCOLOR,
@@ -259,6 +276,8 @@ enum {
     A_SET_FIXED_FONT,
     A_EDITNOTE,
     A_NOP,
+    A_MERGECELLS,
+    A_UNMERGECELLS,
     A_TAGSET = 1000,  // and all values from here on
     #ifdef ENABLE_LOBSTER
         A_SCRIPT = 2000,  // and all values from here on

@@ -209,7 +209,8 @@ class Selection {
                             if (dy) {
                                 cursorend = cursor;
                                 auto &text = GetCell()->text;
-                                int maxcolwidth = GetCell()->parent->grid->colwidths[x];
+                                auto parentgrid = GetCell()->parent->grid.get();
+                                int maxcolwidth = parentgrid->SpanColWidth(x, parentgrid->MergeXS(x, y));
 
                                 int i = 0;
                                 int laststart, lastlen;
@@ -306,6 +307,9 @@ class Selection {
     }
 
     void Cursor(Document *doc, int action, bool ctrl, bool shift, bool exitedit = false) {
+        int oldx = x;
+        int oldy = y;
+        Cell *oldcell = !textedit && !ctrl && !shift ? GetCell() : nullptr;
         switch (action) {
             case A_UP: Dir(doc, ctrl, shift, 0, -1, y, ys, xs, y != 0, y != 0, exitedit); break;
             case A_DOWN:
@@ -316,6 +320,11 @@ class Selection {
                 Dir(doc, ctrl, shift, 1, 0, x, xs, ys, x < grid->xs, x < grid->xs - 1, exitedit);
                 break;
         }
+        if (oldcell && oldcell->Merged() && grid && xs == 1 && ys == 1) {
+            if (action == A_RIGHT && oldx + oldcell->mergexs < grid->xs) x = oldx + oldcell->mergexs;
+            if (action == A_DOWN && oldy + oldcell->mergeys < grid->ys) y = oldy + oldcell->mergeys;
+        }
+        if (grid && !textedit && xs == 1 && ys == 1) grid->NormalizeSelection(*this);
         sys->frame->UpdateStatus(doc->selected, true);
     }
 

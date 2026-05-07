@@ -16,6 +16,51 @@ project(TreeSheets
     HOMEPAGE_URL "https://github.com/aardappel/treesheets"
     VERSION "${TREESHEETS_VERSION}")
 
+if(WIN32 AND MSVC)
+    string(TOLOWER "${CMAKE_CXX_COMPILER_ARCHITECTURE_ID}" TREESHEETS_MSVC_ARCH)
+    if(TREESHEETS_MSVC_ARCH STREQUAL "amd64")
+        set(TREESHEETS_MSVC_ARCH "x64")
+    endif()
+
+    if(CMAKE_CXX_COMPILER)
+        cmake_path(GET CMAKE_CXX_COMPILER PARENT_PATH TREESHEETS_VC_BIN_ARCH_DIR)
+        cmake_path(GET TREESHEETS_VC_BIN_ARCH_DIR PARENT_PATH TREESHEETS_VC_BIN_HOST_DIR)
+        cmake_path(GET TREESHEETS_VC_BIN_HOST_DIR PARENT_PATH TREESHEETS_VC_BIN_DIR)
+        cmake_path(GET TREESHEETS_VC_BIN_DIR PARENT_PATH TREESHEETS_VC_TOOLS_DIR)
+
+        if(EXISTS "${TREESHEETS_VC_TOOLS_DIR}/include")
+            include_directories(SYSTEM "${TREESHEETS_VC_TOOLS_DIR}/include")
+        endif()
+        if(EXISTS "${TREESHEETS_VC_TOOLS_DIR}/lib/${TREESHEETS_MSVC_ARCH}")
+            link_directories("${TREESHEETS_VC_TOOLS_DIR}/lib/${TREESHEETS_MSVC_ARCH}")
+        endif()
+    endif()
+
+    if(CMAKE_RC_COMPILER)
+        cmake_path(GET CMAKE_RC_COMPILER PARENT_PATH TREESHEETS_WINSDK_BIN_ARCH_DIR)
+        cmake_path(GET TREESHEETS_WINSDK_BIN_ARCH_DIR PARENT_PATH TREESHEETS_WINSDK_BIN_VERSION_DIR)
+        cmake_path(GET TREESHEETS_WINSDK_BIN_VERSION_DIR FILENAME TREESHEETS_WINSDK_VERSION)
+        cmake_path(GET TREESHEETS_WINSDK_BIN_VERSION_DIR PARENT_PATH TREESHEETS_WINSDK_BIN_DIR)
+        cmake_path(GET TREESHEETS_WINSDK_BIN_DIR PARENT_PATH TREESHEETS_WINSDK_ROOT)
+
+        foreach(TREESHEETS_WINSDK_INCLUDE_KIND ucrt shared um winrt cppwinrt)
+            set(TREESHEETS_WINSDK_INCLUDE_DIR
+                "${TREESHEETS_WINSDK_ROOT}/Include/${TREESHEETS_WINSDK_VERSION}/${TREESHEETS_WINSDK_INCLUDE_KIND}")
+            if(EXISTS "${TREESHEETS_WINSDK_INCLUDE_DIR}")
+                include_directories(SYSTEM "${TREESHEETS_WINSDK_INCLUDE_DIR}")
+            endif()
+        endforeach()
+
+        foreach(TREESHEETS_WINSDK_LIB_KIND um ucrt)
+            set(TREESHEETS_WINSDK_LIB_DIR
+                "${TREESHEETS_WINSDK_ROOT}/Lib/${TREESHEETS_WINSDK_VERSION}/${TREESHEETS_WINSDK_LIB_KIND}/${TREESHEETS_MSVC_ARCH}")
+            if(EXISTS "${TREESHEETS_WINSDK_LIB_DIR}")
+                link_directories("${TREESHEETS_WINSDK_LIB_DIR}")
+            endif()
+        endforeach()
+    endif()
+endif()
+
 ### Settings
 
 set(CMAKE_CXX_STANDARD 20)
@@ -23,12 +68,16 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS 1)
 OPTION(ENABLE_LOBSTER "Enable Lobster scripting" ON)
 option(ENABLE_IPO "Enable interprocedural/link time optimization" ON)
 if(ENABLE_IPO)
-    include(CheckIPOSupported)
-    check_ipo_supported(RESULT iporesult OUTPUT output)
-    if(iporesult)
-        set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
+    if(MSVC AND ("$ENV{LIB}" STREQUAL "" OR "$ENV{INCLUDE}" STREQUAL ""))
+        message(STATUS "Skipping IPO check because the MSVC environment is not initialized.")
     else()
-        message(WARNING "IPO is not supported: ${output}")
+        include(CheckIPOSupported)
+        check_ipo_supported(RESULT iporesult OUTPUT output)
+        if(iporesult)
+            set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
+        else()
+            message(WARNING "IPO is not supported: ${output}")
+        endif()
     endif()
 endif()
 

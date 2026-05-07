@@ -207,7 +207,7 @@ exit /b 0
 
 :ensure_msvc
 where cl.exe >nul 2>nul
-if not errorlevel 1 exit /b 0
+if not errorlevel 1 if defined LIB if defined INCLUDE exit /b 0
 
 set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
 if not exist "%VSWHERE%" (

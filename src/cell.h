@@ -39,6 +39,8 @@ struct Cell {
     bool tiny {false};
     bool verticaltextandgrid {true};
     wxUint8 drawstyle {DS_GRID};
+    int mergexs {1};
+    int mergeys {1};
     wxString note;
 
     Cell(Cell *_p = nullptr, const Cell *_clonefrom = nullptr, int _ct = CT_DATA,
@@ -57,6 +59,7 @@ struct Cell {
         grid = nullptr;
         text.t.Clear();
         text.image = nullptr;
+        mergexs = mergeys = 1;
         Reset();
     }
 
@@ -65,6 +68,8 @@ struct Cell {
     bool HasTextState() const { return HasTextSize() || text.image; }
     bool HasHeader() const { return HasText() || text.image; }
     bool HasContent() const { return HasHeader() || grid; }
+    bool Covered() const { return mergexs <= 0 || mergeys <= 0; }
+    bool Merged() const { return mergexs > 1 || mergeys > 1; }
     bool GridShown(Document *doc) const {
         return grid && (!grid->folded || this == doc->currentdrawroot);
     }
@@ -154,7 +159,7 @@ struct Cell {
             loop(i, 4) cp[i] = cp[i] * 800 / 1000;
         }
 
-        if (drawstyle == DS_GRID && actualcellcolor != parentcolor) {
+        if (drawstyle == DS_GRID && (actualcellcolor != parentcolor || Merged())) {
             DrawRectangle(dc, actualcellcolor, bx - ml, by - mt, sx + ml + mr, sy + mt + mb);
         }
         if (drawstyle != DS_GRID && HasContent() && !tiny) {
@@ -208,6 +213,8 @@ struct Cell {
                                                grid ? make_shared<Grid>(grid->xs, grid->ys) : nullptr);
         c->text = text;
         c->text.cell = c.get();
+        c->mergexs = mergexs;
+        c->mergeys = mergeys;
         c->note = note;
         if (grid) { grid->Clone(c->grid); }
         return c;
@@ -358,6 +365,8 @@ struct Cell {
         dos.Write32(textcolor);
         dos.Write8(drawstyle);
         dos.WriteString(note);
+        dos.Write32(mergexs);
+        dos.Write32(mergeys);
         uint cellflags = this == ocs ? TS_SELECTION_MASK : 0;
         if (HasTextState()) {
             cellflags |= grid ? TS_BOTH : TS_TEXT;
@@ -401,6 +410,10 @@ struct Cell {
         }
         if (sys->versionlastloaded >= 15) c->drawstyle = dis.Read8();
         if (sys->versionlastloaded >= 25) c->note = dis.ReadString();
+        if (sys->versionlastloaded >= 26) {
+            c->mergexs = dis.Read32();
+            c->mergeys = dis.Read32();
+        }
         int ts = dis.Read8();
         if (ts & TS_SELECTION_MASK) {
             ics = c;

@@ -100,8 +100,117 @@ struct Grid {
     unique_ptr<Cell> CloneSel(const Selection &sel) {
         auto cl = make_unique<Cell>(nullptr, sel.grid->cell, CT_DATA, make_shared<Grid>(sel.xs, sel.ys));
         foreachcellinsel(c, sel) cl->grid->C(x - sel.x, y - sel.y) = c->Clone(cl.get());
-        loop(i, sel.xs) cl->grid->colwidths[i] = sel.grid->colwidths[i];
+        loop(i, sel.xs) cl->grid->colwidths[i] = sel.grid->colwidths[sel.x + i];
+        cl->grid->RepairMergedCells();
         return cl;
+    }
+
+    bool IsCovered(int x, int y) const { return C(x, y)->Covered(); }
+
+    int MergeXS(int x, int y) const {
+        auto c = C(x, y);
+        return c->mergexs > 0 ? min(c->mergexs, xs - x) : 1;
+    }
+
+    int MergeYS(int x, int y) const {
+        auto c = C(x, y);
+        return c->mergeys > 0 ? min(c->mergeys, ys - y) : 1;
+    }
+
+    int SpanColWidth(int x, int span) const {
+        int width = 0;
+        loop(i, min(span, xs - x)) width += colwidths[x + i];
+        return width;
+    }
+
+    int SpanSize(int span, int *sizes) const {
+        int size = 0;
+        loop(i, span) size += sizes[i];
+        return size + (span - 1) * (g_line_width + cell_margin * 2);
+    }
+
+    void GrowSpanToFit(int span, int *sizes, int wanted) {
+        int current = SpanSize(span, sizes);
+        if (wanted <= current) return;
+        int extra = wanted - current;
+        int add = (extra + span - 1) / span;
+        loop(i, span) sizes[i] += add;
+    }
+
+    bool MergeIntersects(int x, int y, int mxs, int mys, const Selection &sel) {
+        return x < sel.x + sel.xs && x + mxs > sel.x && y < sel.y + sel.ys &&
+               y + mys > sel.y;
+    }
+
+    bool HasMergedIntersecting(const Selection &sel) {
+        foreachcell(c) if (!IsCovered(x, y)) {
+            int mxs = MergeXS(x, y);
+            int mys = MergeYS(x, y);
+            if ((mxs > 1 || mys > 1) && MergeIntersects(x, y, mxs, mys, sel)) return true;
+        }
+        return false;
+    }
+
+    bool UnmergeIntersecting(const Selection &sel) {
+        bool changed = false;
+        foreachcell(c) if (!IsCovered(x, y)) {
+            int mxs = MergeXS(x, y);
+            int mys = MergeYS(x, y);
+            if ((mxs > 1 || mys > 1) && MergeIntersects(x, y, mxs, mys, sel)) {
+                loop(yy, mys) loop(xx, mxs) {
+                    auto cc = C(x + xx, y + yy).get();
+                    cc->mergexs = 1;
+                    cc->mergeys = 1;
+                }
+                changed = true;
+            }
+        }
+        return changed;
+    }
+
+    bool UnmergeAll() {
+        bool changed = false;
+        foreachcell(c) {
+            if (c->mergexs != 1 || c->mergeys != 1) {
+                c->mergexs = 1;
+                c->mergeys = 1;
+                changed = true;
+            }
+        }
+        return changed;
+    }
+
+    void RepairMergedCells() {
+        foreachcell(c) {
+            if (c->mergexs <= 0 || c->mergeys <= 0) {
+                c->mergexs = 1;
+                c->mergeys = 1;
+            }
+            c->mergexs = min(c->mergexs, xs - x);
+            c->mergeys = min(c->mergeys, ys - y);
+        }
+        foreachcell(c) if (c->Merged()) {
+            loop(yy, MergeYS(x, y)) loop(xx, MergeXS(x, y)) {
+                if (!xx && !yy) continue;
+                auto cc = C(x + xx, y + yy).get();
+                cc->Clear();
+                cc->mergexs = 0;
+                cc->mergeys = 0;
+            }
+        }
+    }
+
+    void NormalizeSelection(Selection &sel) {
+        if (sel.grid.get() != this || sel.xs != 1 || sel.ys != 1 || !IsCovered(sel.x, sel.y))
+            return;
+        foreachcell(c) if (!IsCovered(x, y)) {
+            if (sel.x >= x && sel.x < x + MergeXS(x, y) && sel.y >= y &&
+                sel.y < y + MergeYS(x, y)) {
+                sel.x = x;
+                sel.y = y;
+                return;
+            }
+        }
     }
 
     size_t EstimatedMemoryUse() {
@@ -123,15 +232,21 @@ struct Grid {
         loop(i, ys) ya[i] = 0;
         tinyborder = true;
         foreachcell(c) {
-            c->LazyLayout(doc, dc, depth + 1, colwidths[x], forcetiny);
+            if (IsCovered(x, y)) continue;
+            c->LazyLayout(doc, dc, depth + 1, SpanColWidth(x, MergeXS(x, y)), forcetiny);
             tinyborder = c->tiny && tinyborder;
-            xa[x] = max(xa[x], c->sx);
-            ya[y] = max(ya[y], c->sy);
+            if (MergeXS(x, y) == 1) xa[x] = max(xa[x], c->sx);
+            if (MergeYS(x, y) == 1) ya[y] = max(ya[y], c->sy);
         }
         view_grid_outer_spacing =
             tinyborder || cell->drawstyle != DS_GRID ? 0 : user_grid_outer_spacing;
         view_margin = tinyborder || cell->drawstyle != DS_GRID ? 0 : g_grid_margin;
         cell_margin = tinyborder ? 0 : (cell->drawstyle == DS_GRID ? 0 : g_cell_margin);
+        foreachcell(c) {
+            if (IsCovered(x, y)) continue;
+            GrowSpanToFit(MergeXS(x, y), xa + x, c->sx);
+            GrowSpanToFit(MergeYS(x, y), ya + y, c->sy);
+        }
         sx = (xs + 1) * g_line_width + xs * cell_margin * 2 +
              2 * (view_grid_outer_spacing + view_margin) + startx;
         sy = (ys + 1) * g_line_width + ys * cell_margin * 2 +
@@ -147,12 +262,17 @@ struct Grid {
         foreachcell(c) {
             c->ox = cx;
             c->oy = cy;
-            if (c->drawstyle == DS_BLOBLINE && !c->grid) {
+            if (!IsCovered(x, y) && MergeYS(x, y) == 1 && c->drawstyle == DS_BLOBLINE && !c->grid) {
                 assert(c->sy <= ya[y]);
                 c->ycenteroff = (ya[y] - c->sy) / 2;
             }
-            c->sx = xa[x];
-            c->sy = ya[y];
+            if (IsCovered(x, y)) {
+                c->sx = xa[x];
+                c->sy = ya[y];
+            } else {
+                c->sx = SpanSize(MergeXS(x, y), xa + x);
+                c->sy = SpanSize(MergeYS(x, y), ya + y);
+            }
             cx += xa[x] + g_line_width + cell_margin * 2;
             if (x == xs - 1) {
                 cy += ya[y] + g_line_width + cell_margin * 2;
@@ -203,13 +323,16 @@ struct Grid {
         }
 
         foreachcell(c) {
+            if (IsCovered(x, y)) continue;
             int cx = bx + c->ox;
             int cy = by + c->oy;
             if (cx < doc->maxx && cx + c->sx > doc->scrollx && cy < doc->maxy &&
                 cy + c->sy > doc->scrolly) {
+                int mxs = MergeXS(x, y);
+                int mys = MergeYS(x, y);
                 c->Render(doc, cx, cy, dc, depth + 1, (x == 0) * view_margin,
-                          (x == xs - 1) * view_margin, (y == 0) * view_margin,
-                          (y == ys - 1) * view_margin, colwidths[x], cell_margin);
+                          (x + mxs == xs) * view_margin, (y == 0) * view_margin,
+                          (y + mys == ys) * view_margin, SpanColWidth(x, mxs), cell_margin);
             }
         }
 
@@ -221,7 +344,7 @@ struct Grid {
             int srcx = bx + (cell->verticaltextandgrid ? 8 : cell->txs + 4) + g_margin_extra;
             int destyfirst = -1, destylast = -1;
             dc.SetPen(*wxGREY_PEN);
-            foreachcelly(c) if (c->HasContent() && !c->tiny) {
+            foreachcelly(c) if (!IsCovered(0, y) && c->HasContent() && !c->tiny) {
                 int desty = c->ycenteroff + by + c->oy + c->tys / 2 + g_margin_extra;
                 int destx = bx + c->ox - 2 + g_margin_extra;
                 bool visible = srcx < doc->maxx && destx > doc->scrollx &&
@@ -270,6 +393,9 @@ struct Grid {
 
     void FindXY(Document *doc, int px, int py, wxReadOnlyDC &dc) {
         foreachcell(c) {
+            if (IsCovered(x, y)) continue;
+            int mxs = MergeXS(x, y);
+            int mys = MergeYS(x, y);
             int bx = px - c->ox;
             int by = py - c->oy;
             if (bx >= 0 && by >= -g_line_width - g_selmargin && bx < c->sx && by < g_selmargin) {
@@ -278,7 +404,7 @@ struct Grid {
             }
             if (bx >= 0 && by >= c->sy - g_selmargin && bx < c->sx &&
                 by < c->sy + g_line_width + g_selmargin) {
-                doc->hover = Selection(cell->grid, x, y + 1, 1, 0);
+                doc->hover = Selection(cell->grid, x, y + mys, 1, 0);
                 return;
             }
             if (bx >= -g_line_width - g_selmargin && by >= 0 && bx < g_selmargin && by < c->sy) {
@@ -287,7 +413,7 @@ struct Grid {
             }
             if (bx >= c->sx - g_selmargin && by >= 0 && bx < c->sx + g_line_width + g_selmargin &&
                 by < c->sy) {
-                doc->hover = Selection(cell->grid, x + 1, y, 0, 1);
+                doc->hover = Selection(cell->grid, x + mxs, y, 0, 1);
                 return;
             }
             if (c->IsInside(bx, by)) {
@@ -295,7 +421,8 @@ struct Grid {
                 if (doc->hover.grid) return;
                 doc->hover = Selection(cell->grid, x, y, 1, 1);
                 if (c->HasText()) {
-                    c->text.FindCursor(doc, bx, by - c->ycenteroff, dc, doc->hover, colwidths[x]);
+                    c->text.FindCursor(doc, bx, by - c->ycenteroff, dc, doc->hover,
+                                       SpanColWidth(x, mxs));
                 }
                 return;
             }
@@ -348,7 +475,7 @@ struct Grid {
 
     void DrawCursor(Document *doc, wxDC &dc, Selection &sel, bool full, uint color) {
         if (auto c = sel.GetCell(); c && !c->tiny && (c->HasText() || !c->grid))
-            c->text.DrawCursor(doc, dc, sel, full, color, colwidths[sel.x]);
+            c->text.DrawCursor(doc, dc, sel, full, color, SpanColWidth(sel.x, MergeXS(sel.x, sel.y)));
     }
 
     void DrawInsert(Document *doc, wxDC &dc, Selection &sel, uint colour) {
@@ -431,6 +558,7 @@ struct Grid {
     }
 
     void DeleteCells(int dx, int dy, int nxs, int nys) {
+        UnmergeAll();
         vector<unique_ptr<Cell>> ncells;
         ncells.reserve((xs + nxs) * (ys + nys));
         foreachcell(c) if (!(x == dx || y == dy)) ncells.push_back(std::move(c));
@@ -448,6 +576,7 @@ struct Grid {
     }
 
     void MultiCellDeleteSub(Document *doc, Selection &sel) {
+        UnmergeIntersecting(sel);
         foreachcellinsel(c, sel) c->Clear();
         bool delhoriz = true, delvert = true;
         foreachcell(c) {
@@ -478,6 +607,37 @@ struct Grid {
         }
     }
 
+    wxString MergeCells(Document *doc, Selection &sel) {
+        if (sel.Thin()) return doc->NoThin();
+        if (sel.xs * sel.ys <= 1) return _("More than one cell must be selected.");
+        cell->AddUndo(doc);
+        UnmergeIntersecting(sel);
+        auto master = C(sel.x, sel.y).get();
+        foreachcellinsel(c, sel) {
+            if (c.get() == master) continue;
+            c->Clear();
+            c->mergexs = 0;
+            c->mergeys = 0;
+        }
+        master->mergexs = sel.xs;
+        master->mergeys = sel.ys;
+        sel.xs = 1;
+        sel.ys = 1;
+        cell->ResetChildren();
+        doc->canvas->Refresh();
+        return wxEmptyString;
+    }
+
+    wxString UnmergeCells(Document *doc, Selection &sel) {
+        if (sel.Thin()) return doc->NoThin();
+        if (!HasMergedIntersecting(sel)) return _("No merged cells in selection.");
+        cell->AddUndo(doc);
+        UnmergeIntersecting(sel);
+        cell->ResetChildren();
+        doc->canvas->Refresh();
+        return wxEmptyString;
+    }
+
     void DelSelf(Document *doc, Selection &s) {
         if (!doc->drawpath.empty() && doc->drawpath.back().grid == cell->grid) {
             doc->drawpath.pop_back();
@@ -489,6 +649,7 @@ struct Grid {
     }
 
     void InsertCells(int dx, int dy, int nxs, int nys, unique_ptr<Cell> nc = nullptr) {
+        UnmergeAll();
         vector<unique_ptr<Cell>> ocells = std::move(cells);
         int oxs = xs;
         int oys = ys;
@@ -550,6 +711,7 @@ struct Grid {
             if (!rc) return false;
             c.reset(rc);
         }
+        if (sys->versionlastloaded >= 26) RepairMergedCells();
         return true;
     }
 

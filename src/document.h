@@ -1439,6 +1439,9 @@ struct Document {
                 return wxEmptyString;
             }
 
+            case A_MERGECELLS: return selected.grid->MergeCells(this, selected);
+            case A_UNMERGECELLS: return selected.grid->UnmergeCells(this, selected);
+
             case wxID_SELECTALL:
                 selected.SelAll();
                 canvas->Refresh();

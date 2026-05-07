@@ -7,7 +7,7 @@ struct TSFrame : wxFrame {
     #ifdef ENABLE_LOBSTER
         wxFileHistory scripts {A_MAXACTION - A_SCRIPT, A_SCRIPT};
     #endif
-    wxFileSystemWatcher *watcher;
+    wxFileSystemWatcher *watcher {nullptr};
     wxAuiNotebook *notebook {nullptr};
     wxAuiManager aui {this};
     wxPanel *explorerpane {nullptr};
@@ -15,12 +15,17 @@ struct TSFrame : wxFrame {
     wxSearchCtrl *explorersearch {nullptr};
     wxListBox *explorerresults {nullptr};
     wxString explorerroot;
+    wxString explorercontextpath;
+    wxString explorerpendingrefreshpath;
     vector<wxString> explorerresultpaths;
+    std::set<wxString> explorerwatchedpaths;
     wxBitmap line_nw;
     wxBitmap line_sw;
     wxBitmap foldicon;
     bool fromclosebox {true};
     bool watcherwaitingforuser {false};
+    bool explorerrefreshpending {false};
+    bool explorerautohide {false};
     wxColour toolbarbackgroundcolor {0xD8C7BC};
     wxTextCtrl *filter {nullptr};
     wxTextCtrl *replaces {nullptr};
@@ -108,6 +113,7 @@ struct TSFrame : wxFrame {
         sys->cfg->Read("showtbar", &showtbar, true);
         sys->cfg->Read("showsbar", &showsbar, true);
         sys->cfg->Read("lefttabs", &lefttabs, true);
+        sys->cfg->Read("explorerautohide", &explorerautohide, false);
 
         filehistory.Load(*sys->cfg);
         #ifdef ENABLE_LOBSTER
@@ -432,6 +438,10 @@ struct TSFrame : wxFrame {
             MyAppend(editmenu, A_PASTESTYLE, _("Paste Style Only") + "\tCTRL+SHIFT+V",
                      _("only sets the colors and style of the copied cell, and keeps the text"));
             MyAppend(editmenu, A_COLLAPSE, _("Collapse Ce&lls") + "\tCTRL+L");
+            MyAppend(editmenu, A_MERGECELLS, _("&Merge Cells"),
+                     _("Merge the selected cells into one visual cell"));
+            MyAppend(editmenu, A_UNMERGECELLS, _("&Unmerge Cells"),
+                     _("Split merged cells back into regular cells"));
             editmenu->AppendSeparator();
 
             MyAppend(editmenu, A_EDITNOTE, _("Edit &Note") + "\tCTRL+E",
@@ -542,6 +552,15 @@ struct TSFrame : wxFrame {
         viewmenu->AppendSeparator();
         MyAppend(viewmenu, A_EXPLORER, _("Explorer") + "\tCTRL+SHIFT+E",
                  _("Toggle the file Explorer panel"));
+        MyAppend(viewmenu, A_EXPLORERROOT, _("Open Explorer Folder..."),
+                 _("Choose the folder shown in the Explorer"));
+        MyAppend(viewmenu, A_EXPLORERREVEALACTIVE, _("Reveal Active File in Explorer"));
+        MyAppend(viewmenu, A_EXPLORERREFRESH, _("Refresh Explorer") + "\tF5");
+        MyAppend(viewmenu, A_EXPLORERCOLLAPSEALL, _("Collapse Explorer Folders"));
+        auto explorerautohideitem =
+            viewmenu->AppendCheckItem(A_EXPLORERAUTOHIDE, _("Auto-hide Explorer"),
+                                      _("Hide the Explorer after opening a file"));
+        explorerautohideitem->Check(explorerautohide);
         viewmenu->AppendSeparator();
         MyAppend(
             viewmenu, A_NEXTFILE,
@@ -811,6 +830,7 @@ struct TSFrame : wxFrame {
                 .BestSize(FromDIP(wxSize(280, 500)))
                 .MinSize(FromDIP(wxSize(220, 180)))
                 .CloseButton(true)
+                .MinimizeButton(true)
                 .MaximizeButton(true));
         aui.AddPane(
             notebook,
@@ -838,7 +858,7 @@ struct TSFrame : wxFrame {
     wxString ReadExplorerRoot() {
         auto root = sys->cfg->Read("explorerroot", wxGetCwd());
         if (!wxDirExists(root)) root = wxGetCwd();
-        return root;
+        return NormalizeExplorerDir(root);
     }
 
     void CreateExplorerPane() {
@@ -853,8 +873,17 @@ struct TSFrame : wxFrame {
         title->SetFont(titlefont);
         header->Add(title, 1, wxALIGN_CENTER_VERTICAL | wxLEFT, FromDIP(8));
 
-        auto openfolder = new wxButton(explorerpane, wxID_ANY, _("Open Folder..."),
+        auto newfile = new wxButton(explorerpane, wxID_ANY, _("File+"), wxDefaultPosition,
+                                    wxDefaultSize, wxBU_EXACTFIT);
+        auto newfolder = new wxButton(explorerpane, wxID_ANY, _("Folder+"), wxDefaultPosition,
+                                      wxDefaultSize, wxBU_EXACTFIT);
+        auto refresh = new wxButton(explorerpane, wxID_ANY, _("Refresh"), wxDefaultPosition,
+                                    wxDefaultSize, wxBU_EXACTFIT);
+        auto openfolder = new wxButton(explorerpane, wxID_ANY, _("Open..."),
                                        wxDefaultPosition, wxDefaultSize, wxBU_EXACTFIT);
+        header->Add(newfile, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(4));
+        header->Add(newfolder, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(4));
+        header->Add(refresh, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(4));
         header->Add(openfolder, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(6));
         sizer->Add(header, 0, wxEXPAND | wxTOP | wxBOTTOM, FromDIP(6));
 
@@ -875,6 +904,15 @@ struct TSFrame : wxFrame {
         explorerpane->SetToolTip(explorerroot);
 
         openfolder->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { ChooseExplorerRoot(); });
+        refresh->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { RefreshExplorerTree(); });
+        newfile->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) {
+            explorercontextpath = ExplorerTargetDirectory();
+            ExplorerNewFile();
+        });
+        newfolder->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) {
+            explorercontextpath = ExplorerTargetDirectory();
+            ExplorerNewFolder();
+        });
         explorersearch->Bind(wxEVT_TEXT, &TSFrame::OnExplorerSearch, this);
         explorersearch->Bind(wxEVT_TEXT_ENTER, &TSFrame::OnExplorerSearch, this);
         explorersearch->Bind(wxEVT_SEARCHCTRL_CANCEL_BTN, [this](wxCommandEvent &) {
@@ -884,16 +922,24 @@ struct TSFrame : wxFrame {
         BuildExplorerTree();
         explorertree->Bind(wxEVT_TREE_ITEM_EXPANDING, &TSFrame::OnExplorerTreeExpanding, this);
         explorertree->Bind(wxEVT_TREE_ITEM_ACTIVATED, &TSFrame::OnExplorerTreeActivated, this);
+        explorertree->Bind(wxEVT_TREE_ITEM_RIGHT_CLICK, &TSFrame::OnExplorerTreeContext, this);
+        explorertree->Bind(wxEVT_CONTEXT_MENU, &TSFrame::OnExplorerPaneContext, this);
+        explorertree->Bind(wxEVT_KEY_DOWN, &TSFrame::OnExplorerKeyDown, this);
         explorerresults->Bind(wxEVT_LISTBOX_DCLICK, &TSFrame::OnExplorerResultActivated, this);
+        explorerresults->Bind(wxEVT_CONTEXT_MENU, &TSFrame::OnExplorerResultsContext, this);
+        explorerresults->Bind(wxEVT_KEY_DOWN, &TSFrame::OnExplorerKeyDown, this);
+        explorerpane->Bind(wxEVT_CONTEXT_MENU, &TSFrame::OnExplorerPaneContext, this);
     }
 
     void SetExplorerRoot(const wxString &root) {
         if (!wxDirExists(root)) return;
-        explorerroot = root;
+        explorerroot = NormalizeExplorerDir(root);
+        explorercontextpath.clear();
         sys->cfg->Write("explorerroot", explorerroot);
         BuildExplorerTree();
         if (explorerpane) explorerpane->SetToolTip(explorerroot);
         RefreshExplorerSearch();
+        RefreshExplorerWatches();
     }
 
     void ChooseExplorerRoot() {
@@ -920,6 +966,48 @@ struct TSFrame : wxFrame {
         aui.Update();
     }
 
+    void HideExplorer() {
+        auto &pane = aui.GetPane("explorer");
+        if (!pane.IsOk()) return;
+        pane.Show(false);
+        aui.Update();
+    }
+
+    void MaybeAutoHideExplorer() {
+        if (explorerautohide) HideExplorer();
+    }
+
+    wxString NormalizeExplorerPath(const wxString &path) const {
+        if (path.IsEmpty()) return wxEmptyString;
+        wxFileName filename(path);
+        filename.Normalize(wxPATH_NORM_DOTS | wxPATH_NORM_ABSOLUTE | wxPATH_NORM_TILDE);
+        return filename.GetFullPath();
+    }
+
+    wxString NormalizeExplorerDir(const wxString &path) const {
+        if (path.IsEmpty()) return wxEmptyString;
+        wxFileName filename = wxFileName::DirName(path);
+        filename.Normalize(wxPATH_NORM_DOTS | wxPATH_NORM_ABSOLUTE | wxPATH_NORM_TILDE);
+        return filename.GetPath(wxPATH_GET_VOLUME);
+    }
+
+    bool PathIsInsideDirectory(const wxString &path, const wxString &directory) const {
+        auto normalizedpath = NormalizeExplorerPath(path);
+        auto normalizeddir = NormalizeExplorerDir(directory);
+        if (normalizedpath.IsEmpty() || normalizeddir.IsEmpty()) return false;
+        #ifdef __WXMSW__
+            normalizedpath.MakeLower();
+            normalizeddir.MakeLower();
+        #endif
+        if (normalizedpath == normalizeddir) return true;
+        if (!normalizeddir.EndsWith(wxString(wxFILE_SEP_PATH))) normalizeddir += wxFILE_SEP_PATH;
+        return normalizedpath.StartsWith(normalizeddir);
+    }
+
+    bool ExplorerPathIsInsideRoot(const wxString &path) const {
+        return PathIsInsideDirectory(path, explorerroot);
+    }
+
     bool ShouldSkipExplorerDir(const wxString &dirname) const {
         auto lower = dirname.Lower();
         return lower == ".git" || lower == ".hg" || lower == ".svn" || lower == ".vs" ||
@@ -927,8 +1015,20 @@ struct TSFrame : wxFrame {
                lower == "node_modules";
     }
 
+    bool ExplorerPathIsSkipped(const wxString &path) const {
+        if (path.IsEmpty()) return false;
+        wxFileName relative(path);
+        if (!relative.MakeRelativeTo(explorerroot)) return false;
+        for (const auto &dir : relative.GetDirs()) {
+            if (ShouldSkipExplorerDir(dir)) return true;
+        }
+        if (wxDirExists(path) && ShouldSkipExplorerDir(wxFileName(path).GetFullName()))
+            return true;
+        return false;
+    }
+
     bool IsExplorerVisibleFile(const wxString &path) const {
-        return wxFileName(path).GetExt().Lower() == "cts";
+        return !path.IsEmpty();
     }
 
     wxString ExplorerPathFromTreeItem(const wxTreeItemId &item) const {
@@ -961,6 +1061,30 @@ struct TSFrame : wxFrame {
         return false;
     }
 
+    void WatchExplorerDirectory(const wxString &directory) {
+        if (!watcher || !wxDirExists(directory)) return;
+        auto normalized = NormalizeExplorerDir(directory);
+        if (normalized.IsEmpty() || !explorerwatchedpaths.insert(normalized).second) return;
+        watcher->Add(wxFileName::DirName(normalized), wxFSW_EVENT_ALL);
+    }
+
+    void WatchLoadedExplorerDirectories(const wxTreeItemId &item) {
+        auto path = ExplorerPathFromTreeItem(item);
+        if (wxDirExists(path)) WatchExplorerDirectory(path);
+        if (!explorertree || !item.IsOk() || !explorertree->ItemHasChildren(item)) return;
+        wxTreeItemIdValue cookie;
+        auto child = explorertree->GetFirstChild(item, cookie);
+        while (child.IsOk()) {
+            if (!ExplorerTreeItemIsDummy(child)) WatchLoadedExplorerDirectories(child);
+            child = explorertree->GetNextChild(item, cookie);
+        }
+    }
+
+    void RefreshExplorerWatches() {
+        if (!watcher || !explorertree || !explorertree->GetRootItem().IsOk()) return;
+        WatchLoadedExplorerDirectories(explorertree->GetRootItem());
+    }
+
     wxTreeItemId AppendExplorerTreeItem(const wxTreeItemId &parent, const wxString &path) {
         wxFileName filename(path);
         auto label = filename.GetFullName();
@@ -981,6 +1105,7 @@ struct TSFrame : wxFrame {
         if (!explorertree || !item.IsOk()) return;
         auto directory = ExplorerPathFromTreeItem(item);
         if (directory.IsEmpty() || !wxDirExists(directory)) return;
+        WatchExplorerDirectory(directory);
 
         explorertree->DeleteChildren(item);
         wxDir dir(directory);
@@ -1018,13 +1143,99 @@ struct TSFrame : wxFrame {
         return child.IsOk() && ExplorerTreeItemIsDummy(child);
     }
 
-    void BuildExplorerTree() {
+    void CollectExpandedExplorerPaths(const wxTreeItemId &item, std::set<wxString> &paths) const {
+        if (!explorertree || !item.IsOk()) return;
+        auto path = ExplorerPathFromTreeItem(item);
+        if (!path.IsEmpty() && explorertree->IsExpanded(item)) paths.insert(NormalizeExplorerPath(path));
+        if (!explorertree->ItemHasChildren(item)) return;
+
+        wxTreeItemIdValue cookie;
+        auto child = explorertree->GetFirstChild(item, cookie);
+        while (child.IsOk()) {
+            if (!ExplorerTreeItemIsDummy(child)) CollectExpandedExplorerPaths(child, paths);
+            child = explorertree->GetNextChild(item, cookie);
+        }
+    }
+
+    wxTreeItemId FindExplorerTreeItemByPath(const wxTreeItemId &item,
+                                            const wxString &path) const {
+        if (!explorertree || !item.IsOk() || path.IsEmpty()) return wxTreeItemId();
+        auto itempath = ExplorerPathFromTreeItem(item);
+        if (!itempath.IsEmpty() && NormalizeExplorerPath(itempath) == NormalizeExplorerPath(path))
+            return item;
+        if (!explorertree->ItemHasChildren(item)) return wxTreeItemId();
+
+        wxTreeItemIdValue cookie;
+        auto child = explorertree->GetFirstChild(item, cookie);
+        while (child.IsOk()) {
+            if (!ExplorerTreeItemIsDummy(child)) {
+                auto found = FindExplorerTreeItemByPath(child, path);
+                if (found.IsOk()) return found;
+            }
+            child = explorertree->GetNextChild(item, cookie);
+        }
+        return wxTreeItemId();
+    }
+
+    void RestoreExplorerExpansion(const wxTreeItemId &item, const std::set<wxString> &paths) {
+        if (!explorertree || !item.IsOk()) return;
+        auto path = ExplorerPathFromTreeItem(item);
+        if (!path.IsEmpty() && paths.find(NormalizeExplorerPath(path)) != paths.end() &&
+            wxDirExists(path)) {
+            if (ExplorerTreeHasDummyChild(item)) LoadExplorerTreeChildren(item);
+            explorertree->Expand(item);
+        }
+        if (!explorertree->ItemHasChildren(item)) return;
+
+        wxTreeItemIdValue cookie;
+        auto child = explorertree->GetFirstChild(item, cookie);
+        while (child.IsOk()) {
+            if (!ExplorerTreeItemIsDummy(child)) RestoreExplorerExpansion(child, paths);
+            child = explorertree->GetNextChild(item, cookie);
+        }
+    }
+
+    wxString ExplorerSelectedPath() const {
+        if (explorerresults && explorerresults->IsShown()) {
+            auto selection = explorerresults->GetSelection();
+            if (selection >= 0 && static_cast<size_t>(selection) < explorerresultpaths.size())
+                return explorerresultpaths[selection];
+        }
+        if (explorertree) return ExplorerPathFromTreeItem(explorertree->GetSelection());
+        return wxEmptyString;
+    }
+
+    wxString ExplorerTargetDirectory() const {
+        auto path = ExplorerSelectedPath();
+        if (path.IsEmpty()) path = explorercontextpath;
+        if (path.IsEmpty()) path = explorerroot;
+        if (wxDirExists(path)) return path;
+        return wxFileName(path).GetPath(wxPATH_GET_VOLUME);
+    }
+
+    void BuildExplorerTree(const wxString &selectedpath = wxEmptyString,
+                           const std::set<wxString> *expandedpaths = nullptr) {
         if (!explorertree) return;
         explorertree->DeleteAllItems();
         auto root = AppendExplorerTreeItem(wxTreeItemId(), explorerroot);
         LoadExplorerTreeChildren(root);
         explorertree->Expand(root);
-        explorertree->SelectItem(root);
+        if (expandedpaths) RestoreExplorerExpansion(root, *expandedpaths);
+        auto path = selectedpath.IsEmpty() ? explorerroot : selectedpath;
+        auto selected = FindExplorerTreeItemByPath(root, path);
+        explorertree->SelectItem(selected.IsOk() ? selected : root);
+        RefreshExplorerWatches();
+    }
+
+    void RefreshExplorerTree(const wxString &selectedpath = wxEmptyString) {
+        if (!explorertree) return;
+        std::set<wxString> expandedpaths;
+        auto root = explorertree->GetRootItem();
+        if (root.IsOk()) CollectExpandedExplorerPaths(root, expandedpaths);
+        expandedpaths.insert(NormalizeExplorerPath(explorerroot));
+        auto path = selectedpath.IsEmpty() ? ExplorerSelectedPath() : selectedpath;
+        BuildExplorerTree(path, &expandedpaths);
+        RefreshExplorerSearch();
     }
 
     wxString ExplorerDisplayPath(const wxString &path) const {
@@ -1091,6 +1302,102 @@ struct TSFrame : wxFrame {
         explorerpane->Layout();
     }
 
+    bool SelectExplorerTreePath(const wxString &path) {
+        if (!explorertree || path.IsEmpty()) return false;
+        auto root = explorertree->GetRootItem();
+        if (!root.IsOk()) return false;
+
+        auto target = NormalizeExplorerPath(path);
+        auto parentpath = wxDirExists(path) ? target : NormalizeExplorerDir(
+                                                    wxFileName(path).GetPath(wxPATH_GET_VOLUME));
+        wxFileName relative(parentpath);
+        if (!relative.MakeRelativeTo(explorerroot)) return false;
+
+        auto item = root;
+        for (const auto &part : relative.GetDirs()) {
+            if (ExplorerTreeHasDummyChild(item)) LoadExplorerTreeChildren(item);
+            explorertree->Expand(item);
+
+            wxTreeItemIdValue cookie;
+            auto child = explorertree->GetFirstChild(item, cookie);
+            wxTreeItemId next;
+            while (child.IsOk()) {
+                auto childpath = ExplorerPathFromTreeItem(child);
+                if (wxDirExists(childpath) && wxFileName(childpath).GetFullName() == part) {
+                    next = child;
+                    break;
+                }
+                child = explorertree->GetNextChild(item, cookie);
+            }
+            if (!next.IsOk()) return false;
+            item = next;
+        }
+
+        if (ExplorerTreeHasDummyChild(item)) LoadExplorerTreeChildren(item);
+        auto targetitem = FindExplorerTreeItemByPath(item, target);
+        if (!targetitem.IsOk()) targetitem = item;
+        explorertree->SelectItem(targetitem);
+        explorertree->EnsureVisible(targetitem);
+        return true;
+    }
+
+    void RevealExplorerPath(const wxString &path) {
+        if (path.IsEmpty()) return;
+        auto normalized = NormalizeExplorerPath(path);
+        if (!ExplorerPathIsInsideRoot(normalized)) {
+            auto directory = wxDirExists(normalized) ? normalized
+                                                     : wxFileName(normalized).GetPath(
+                                                           wxPATH_GET_VOLUME);
+            if (wxDirExists(directory)) SetExplorerRoot(directory);
+        }
+        if (!SelectExplorerTreePath(normalized)) {
+            RefreshExplorerTree(normalized);
+            SelectExplorerTreePath(normalized);
+        }
+        ShowExplorer();
+    }
+
+    void RevealCurrentDocumentInExplorer() {
+        auto canvas = GetCurrentTab();
+        if (!canvas || canvas->doc->filename.IsEmpty()) {
+            SetStatus(_("Current document has not been saved yet."));
+            return;
+        }
+        RevealExplorerPath(canvas->doc->filename);
+    }
+
+    void RevealCurrentDocumentInExplorerIfVisible() {
+        auto &pane = aui.GetPane("explorer");
+        auto canvas = GetCurrentTab();
+        if (!pane.IsOk() || !pane.IsShown() || !canvas || canvas->doc->filename.IsEmpty() ||
+            !explorersearch || !explorersearch->GetValue().IsEmpty() ||
+            !ExplorerPathIsInsideRoot(canvas->doc->filename))
+            return;
+        SelectExplorerTreePath(canvas->doc->filename);
+    }
+
+    void CollapseExplorerChildren(const wxTreeItemId &item) {
+        if (!explorertree || !item.IsOk() || !explorertree->ItemHasChildren(item)) return;
+        wxTreeItemIdValue cookie;
+        auto child = explorertree->GetFirstChild(item, cookie);
+        while (child.IsOk()) {
+            if (!ExplorerTreeItemIsDummy(child)) {
+                CollapseExplorerChildren(child);
+                if (wxDirExists(ExplorerPathFromTreeItem(child))) explorertree->Collapse(child);
+            }
+            child = explorertree->GetNextChild(item, cookie);
+        }
+    }
+
+    void CollapseExplorerTree() {
+        if (!explorertree) return;
+        auto root = explorertree->GetRootItem();
+        if (!root.IsOk()) return;
+        CollapseExplorerChildren(root);
+        explorertree->Expand(root);
+        explorertree->EnsureVisible(root);
+    }
+
     void OpenExplorerPath(const wxString &path) {
         if (path.IsEmpty()) return;
         if (wxDirExists(path)) {
@@ -1106,9 +1413,274 @@ struct TSFrame : wxFrame {
         auto fullpath = filename.GetFullPath();
         if (filename.GetExt().Lower() == "cts") {
             SetStatus(sys->Open(fullpath));
+            MaybeAutoHideExplorer();
         } else if (!wxLaunchDefaultApplication(fullpath)) {
             SetStatus(_("File could not be opened."));
+        } else {
+            MaybeAutoHideExplorer();
         }
+    }
+
+    bool ExplorerNameIsValid(const wxString &name) const {
+        if (name.IsEmpty() || name == "." || name == "..") return false;
+        auto forbidden = wxFileName::GetForbiddenChars();
+        for (auto c : forbidden) {
+            if (name.Find(c) != wxNOT_FOUND) return false;
+        }
+        return true;
+    }
+
+    wxString PromptExplorerName(const wxString &message, const wxString &value) {
+        wxTextEntryDialog dialog(this, message, _("Explorer"), value);
+        if (dialog.ShowModal() != wxID_OK) return wxEmptyString;
+        auto name = dialog.GetValue();
+        name.Trim(true).Trim(false);
+        if (!ExplorerNameIsValid(name)) {
+            wxMessageBox(_("Please enter a valid file or folder name."), _("Explorer"), wxOK, this);
+            return wxEmptyString;
+        }
+        return name;
+    }
+
+    wxString ExplorerChildPath(const wxString &directory, const wxString &name) const {
+        wxFileName filename(directory, name);
+        filename.Normalize(wxPATH_NORM_DOTS | wxPATH_NORM_ABSOLUTE | wxPATH_NORM_TILDE);
+        return filename.GetFullPath();
+    }
+
+    void RefreshExplorerAfterFileOperation(const wxString &path) {
+        RefreshExplorerTree(path);
+        if (explorersearch && !explorersearch->GetValue().IsEmpty()) RefreshExplorerSearch();
+        if (!path.IsEmpty() && (wxFileExists(path) || wxDirExists(path))) RevealExplorerPath(path);
+    }
+
+    void ExplorerNewFile() {
+        auto directory = ExplorerTargetDirectory();
+        if (!wxDirExists(directory)) return;
+        auto name = PromptExplorerName(_("New file name:"), "Untitled.cts");
+        if (name.IsEmpty()) return;
+        auto target = ExplorerChildPath(directory, name);
+        wxFileName targetname(target);
+        if (!targetname.HasExt()) {
+            targetname.SetExt("cts");
+            target = targetname.GetFullPath();
+        }
+        if (wxFileExists(target) || wxDirExists(target)) {
+            wxMessageBox(_("A file or folder with that name already exists."), _("Explorer"), wxOK,
+                         this);
+            return;
+        }
+
+        if (targetname.GetExt().Lower() == "cts") {
+            sys->InitDB(10);
+            auto canvas = GetCurrentTab();
+            canvas->doc->ChangeFileName(target, false);
+            bool success = false;
+            SetStatus(canvas->doc->SaveDB(&success));
+            if (!success) return;
+        } else {
+            wxFFileOutputStream stream(target);
+            if (!stream.IsOk()) {
+                SetStatus(_("File could not be created."));
+                return;
+            }
+        }
+        RefreshExplorerAfterFileOperation(target);
+    }
+
+    void ExplorerNewFolder() {
+        auto directory = ExplorerTargetDirectory();
+        if (!wxDirExists(directory)) return;
+        auto name = PromptExplorerName(_("New folder name:"), _("New Folder"));
+        if (name.IsEmpty()) return;
+        auto target = ExplorerChildPath(directory, name);
+        if (wxFileExists(target) || wxDirExists(target)) {
+            wxMessageBox(_("A file or folder with that name already exists."), _("Explorer"), wxOK,
+                         this);
+            return;
+        }
+        if (!wxMkdir(target)) {
+            SetStatus(_("Folder could not be created."));
+            return;
+        }
+        RefreshExplorerAfterFileOperation(target);
+    }
+
+    void UpdateOpenDocumentsAfterExplorerRename(const wxString &oldpath, const wxString &newpath) {
+        if (!notebook) return;
+        auto oldisdir = wxDirExists(newpath) || !wxFileExists(newpath);
+        loop(i, notebook->GetPageCount()) {
+            auto canvas = static_cast<TSCanvas *>(notebook->GetPage(i));
+            auto filename = canvas->doc->filename;
+            if (filename.IsEmpty()) continue;
+            wxString updated;
+            if (NormalizeExplorerPath(filename) == NormalizeExplorerPath(oldpath)) {
+                updated = newpath;
+            } else if (oldisdir && PathIsInsideDirectory(filename, oldpath)) {
+                wxFileName relative(filename);
+                if (relative.MakeRelativeTo(oldpath)) {
+                    wxFileName updatedname(newpath + wxFILE_SEP_PATH + relative.GetFullPath());
+                    updatedname.Normalize(wxPATH_NORM_DOTS | wxPATH_NORM_ABSOLUTE |
+                                          wxPATH_NORM_TILDE);
+                    updated = updatedname.GetFullPath();
+                }
+            }
+            if (!updated.IsEmpty()) canvas->doc->ChangeFileName(updated, false);
+        }
+    }
+
+    void ExplorerRename() {
+        auto path = explorercontextpath.IsEmpty() ? ExplorerSelectedPath() : explorercontextpath;
+        if (path.IsEmpty() || NormalizeExplorerPath(path) == NormalizeExplorerDir(explorerroot)) return;
+        if (!wxFileExists(path) && !wxDirExists(path)) {
+            SetStatus(_("File or folder does not exist."));
+            return;
+        }
+        wxFileName filename(path);
+        auto name = PromptExplorerName(_("Rename to:"), filename.GetFullName());
+        if (name.IsEmpty()) return;
+        auto target = ExplorerChildPath(filename.GetPath(wxPATH_GET_VOLUME), name);
+        if (NormalizeExplorerPath(path) == NormalizeExplorerPath(target)) return;
+        if (wxFileExists(target) || wxDirExists(target)) {
+            wxMessageBox(_("A file or folder with that name already exists."), _("Explorer"), wxOK,
+                         this);
+            return;
+        }
+        if (!wxRenameFile(path, target, false)) {
+            SetStatus(_("File or folder could not be renamed."));
+            return;
+        }
+        UpdateOpenDocumentsAfterExplorerRename(path, target);
+        if (wxFileName(target).GetExt().Lower() == "cts") filehistory.AddFileToHistory(target);
+        RefreshExplorerAfterFileOperation(target);
+    }
+
+    wxString ExplorerDuplicateName(const wxString &path) const {
+        wxFileName filename(path);
+        auto directory = filename.GetPath(wxPATH_GET_VOLUME);
+        auto name = filename.GetName();
+        auto ext = filename.GetExt();
+        for (int i = 1; i < 1000; i++) {
+            auto suffix = i == 1 ? wxString(" copy") : wxString::Format(" copy %d", i);
+            wxFileName candidate(directory, name + suffix, ext);
+            auto fullpath = candidate.GetFullPath();
+            if (!wxFileExists(fullpath) && !wxDirExists(fullpath)) return fullpath;
+        }
+        return wxEmptyString;
+    }
+
+    void ExplorerDuplicate() {
+        auto path = explorercontextpath.IsEmpty() ? ExplorerSelectedPath() : explorercontextpath;
+        if (path.IsEmpty() || !wxFileExists(path)) return;
+        auto target = ExplorerDuplicateName(path);
+        if (target.IsEmpty() || !wxCopyFile(path, target, false)) {
+            SetStatus(_("File could not be duplicated."));
+            return;
+        }
+        RefreshExplorerAfterFileOperation(target);
+    }
+
+    void ExplorerDelete() {
+        auto path = explorercontextpath.IsEmpty() ? ExplorerSelectedPath() : explorercontextpath;
+        if (path.IsEmpty() || NormalizeExplorerPath(path) == NormalizeExplorerDir(explorerroot)) return;
+        auto isdir = wxDirExists(path);
+        if (!isdir && !wxFileExists(path)) {
+            SetStatus(_("File or folder does not exist."));
+            return;
+        }
+        auto message = isdir
+                           ? wxString::Format(
+                                 _("Delete folder \"%s\" and everything inside it?"),
+                                 wxFileName(path).GetFullName())
+                           : wxString::Format(_("Delete file \"%s\"?"),
+                                              wxFileName(path).GetFullName());
+        if (wxMessageBox(message, _("Delete"), wxYES_NO | wxNO_DEFAULT | wxICON_WARNING, this) !=
+            wxYES)
+            return;
+
+        bool ok = isdir ? wxFileName::Rmdir(path, wxPATH_RMDIR_RECURSIVE) : wxRemoveFile(path);
+        if (!ok) {
+            SetStatus(_("File or folder could not be deleted."));
+            return;
+        }
+        RefreshExplorerAfterFileOperation(wxFileName(path).GetPath(wxPATH_GET_VOLUME));
+    }
+
+    void CopyExplorerPath(bool relative) {
+        auto path = explorercontextpath.IsEmpty() ? ExplorerSelectedPath() : explorercontextpath;
+        if (path.IsEmpty()) return;
+        auto text = path;
+        if (relative) {
+            wxFileName filename(path);
+            filename.MakeRelativeTo(explorerroot);
+            text = filename.GetFullPath();
+        }
+        if (wxTheClipboard->Open()) {
+            wxTheClipboard->SetData(new wxTextDataObject(text));
+            wxTheClipboard->Close();
+            SetStatus(_("Path copied."));
+        }
+    }
+
+    void OpenExplorerPathInSystem(const wxString &path) {
+        if (path.IsEmpty()) return;
+        if (!wxLaunchDefaultApplication(path)) SetStatus(_("File or folder could not be opened."));
+    }
+
+    void RevealExplorerPathInSystem(const wxString &path) {
+        if (path.IsEmpty()) return;
+        #ifdef __WXMSW__
+            if (wxFileExists(path))
+                wxExecute("explorer.exe /select,\"" + path + "\"", wxEXEC_ASYNC);
+            else if (wxDirExists(path))
+                wxExecute("explorer.exe \"" + path + "\"", wxEXEC_ASYNC);
+        #elif defined(__WXMAC__)
+            wxExecute("open -R \"" + path + "\"", wxEXEC_ASYNC);
+        #else
+            auto directory = wxDirExists(path) ? path : wxFileName(path).GetPath(wxPATH_GET_VOLUME);
+            if (!wxLaunchDefaultApplication(directory))
+                SetStatus(_("Folder could not be opened."));
+        #endif
+    }
+
+    void PopupExplorerContextMenu(const wxString &path) {
+        explorercontextpath = path.IsEmpty() ? explorerroot : path;
+        auto isdir = wxDirExists(explorercontextpath);
+        auto isfile = wxFileExists(explorercontextpath);
+        auto isroot = NormalizeExplorerPath(explorercontextpath) == NormalizeExplorerDir(explorerroot);
+
+        wxMenu menu;
+        auto open = menu.Append(A_EXPLOREROPEN, isdir ? _("Open as Explorer Root") : _("Open"));
+        open->Enable(isdir || isfile);
+        auto opensystem = menu.Append(A_EXPLOREROPENSYSTEM, _("Open in System"));
+        opensystem->Enable(isdir || isfile);
+        auto reveal = menu.Append(A_EXPLORERREVEAL, _("Reveal in System"));
+        reveal->Enable(isdir || isfile);
+        menu.AppendSeparator();
+        menu.Append(A_EXPLORERNEWFILE, _("New File..."));
+        menu.Append(A_EXPLORERNEWFOLDER, _("New Folder..."));
+        auto rename = menu.Append(A_EXPLORERRENAME, _("Rename...") + "\tF2");
+        rename->Enable((isdir || isfile) && !isroot);
+        auto duplicate = menu.Append(A_EXPLORERDUPLICATE, _("Duplicate File"));
+        duplicate->Enable(isfile);
+        auto del = menu.Append(A_EXPLORERDELETE, _("Delete") + "\tDel");
+        del->Enable((isdir || isfile) && !isroot);
+        menu.AppendSeparator();
+        auto setroot = menu.Append(A_EXPLORERSETROOT, _("Set as Explorer Root"));
+        setroot->Enable(isdir);
+        auto parent = menu.Append(A_EXPLOREROPENPARENT, _("Open Parent as Explorer Root"));
+        parent->Enable(!isroot && (isdir || isfile));
+        menu.AppendSeparator();
+        menu.Append(A_EXPLORERCOPYPATH, _("Copy Path"));
+        menu.Append(A_EXPLORERCOPYRELPATH, _("Copy Relative Path"));
+        menu.AppendSeparator();
+        menu.Append(A_EXPLORERREFRESH, _("Refresh") + "\tF5");
+        menu.Append(A_EXPLORERCOLLAPSEALL, _("Collapse Folders"));
+        auto autohide =
+            menu.AppendCheckItem(A_EXPLORERAUTOHIDE, _("Auto-hide After Open"));
+        autohide->Check(explorerautohide);
+        menu.Append(A_EXPLORERHIDE, _("Hide Explorer"));
+        PopupMenu(&menu);
     }
 
     void OnExplorerSearch(wxCommandEvent &) { RefreshExplorerSearch(); }
@@ -1138,6 +1710,43 @@ struct TSFrame : wxFrame {
         auto selection = event.GetSelection();
         if (selection >= 0 && static_cast<size_t>(selection) < explorerresultpaths.size())
             OpenExplorerPath(explorerresultpaths[selection]);
+    }
+
+    void OnExplorerTreeContext(wxTreeEvent &event) {
+        auto item = event.GetItem();
+        if (item.IsOk()) explorertree->SelectItem(item);
+        PopupExplorerContextMenu(ExplorerPathFromTreeItem(item));
+    }
+
+    void OnExplorerResultsContext(wxContextMenuEvent &) {
+        PopupExplorerContextMenu(ExplorerSelectedPath());
+    }
+
+    void OnExplorerPaneContext(wxContextMenuEvent &) {
+        PopupExplorerContextMenu(ExplorerSelectedPath());
+    }
+
+    void OnExplorerKeyDown(wxKeyEvent &event) {
+        switch (event.GetKeyCode()) {
+            case WXK_F5:
+                RefreshExplorerTree();
+                return;
+            case WXK_F2:
+                explorercontextpath = ExplorerSelectedPath();
+                ExplorerRename();
+                return;
+            case WXK_DELETE:
+                explorercontextpath = ExplorerSelectedPath();
+                ExplorerDelete();
+                return;
+            case WXK_RETURN:
+            case WXK_NUMPAD_ENTER:
+                OpenExplorerPath(ExplorerSelectedPath());
+                return;
+            default:
+                event.Skip();
+                return;
+        }
     }
 
     wxArrayString GetToolbarPaneNames() {
@@ -1375,6 +1984,28 @@ struct TSFrame : wxFrame {
         watcher = new wxFileSystemWatcher();
         watcher->SetOwner(this);
         Connect(wxEVT_FSWATCHER, wxFileSystemWatcherEventHandler(TSFrame::OnFileSystemEvent));
+        RefreshExplorerWatches();
+    }
+
+    bool ExplorerShouldRefreshForEvent(const wxFileSystemWatcherEvent &event) const {
+        if (!explorertree || explorerroot.IsEmpty()) return false;
+        auto path = event.GetPath().GetFullPath();
+        auto newpath = event.GetNewPath().GetFullPath();
+        return (ExplorerPathIsInsideRoot(path) && !ExplorerPathIsSkipped(path)) ||
+               (ExplorerPathIsInsideRoot(newpath) && !ExplorerPathIsSkipped(newpath));
+    }
+
+    void ScheduleExplorerRefresh(const wxString &path) {
+        if (!explorertree) return;
+        if (!path.IsEmpty()) explorerpendingrefreshpath = path;
+        if (explorerrefreshpending) return;
+        explorerrefreshpending = true;
+        CallAfter([this]() {
+            explorerrefreshpending = false;
+            auto path = explorerpendingrefreshpath;
+            explorerpendingrefreshpath.clear();
+            RefreshExplorerTree(path);
+        });
     }
 
     // event handling functions
@@ -1481,6 +2112,64 @@ struct TSFrame : wxFrame {
                 break;
             case A_EXPLORERROOT:
                 ChooseExplorerRoot();
+                break;
+            case A_EXPLOREROPEN:
+                OpenExplorerPath(explorercontextpath.IsEmpty() ? ExplorerSelectedPath()
+                                                               : explorercontextpath);
+                break;
+            case A_EXPLOREROPENSYSTEM:
+                OpenExplorerPathInSystem(explorercontextpath.IsEmpty() ? ExplorerSelectedPath()
+                                                                       : explorercontextpath);
+                break;
+            case A_EXPLORERNEWFILE:
+                ExplorerNewFile();
+                break;
+            case A_EXPLORERNEWFOLDER:
+                ExplorerNewFolder();
+                break;
+            case A_EXPLORERRENAME:
+                ExplorerRename();
+                break;
+            case A_EXPLORERDELETE:
+                ExplorerDelete();
+                break;
+            case A_EXPLORERDUPLICATE:
+                ExplorerDuplicate();
+                break;
+            case A_EXPLORERREFRESH:
+                RefreshExplorerTree();
+                break;
+            case A_EXPLORERCOLLAPSEALL:
+                CollapseExplorerTree();
+                break;
+            case A_EXPLORERSETROOT:
+                if (wxDirExists(explorercontextpath)) SetExplorerRoot(explorercontextpath);
+                break;
+            case A_EXPLOREROPENPARENT: {
+                auto path = explorercontextpath.IsEmpty() ? ExplorerSelectedPath() : explorercontextpath;
+                auto directory = wxFileName(path).GetPath(wxPATH_GET_VOLUME);
+                if (wxDirExists(directory)) SetExplorerRoot(directory);
+                break;
+            }
+            case A_EXPLORERREVEAL:
+                RevealExplorerPathInSystem(explorercontextpath.IsEmpty() ? ExplorerSelectedPath()
+                                                                         : explorercontextpath);
+                break;
+            case A_EXPLORERCOPYPATH:
+                CopyExplorerPath(false);
+                break;
+            case A_EXPLORERCOPYRELPATH:
+                CopyExplorerPath(true);
+                break;
+            case A_EXPLORERHIDE:
+                HideExplorer();
+                break;
+            case A_EXPLORERAUTOHIDE:
+                sys->cfg->Write("explorerautohide", explorerautohide = ce.IsChecked());
+                if (GetMenuBar()) GetMenuBar()->Check(A_EXPLORERAUTOHIDE, explorerautohide);
+                break;
+            case A_EXPLORERREVEALACTIVE:
+                RevealCurrentDocumentInExplorer();
                 break;
 
             case A_ALEFT: canvas->CursorScroll(-g_scrollratecursor, 0); break;
@@ -1649,6 +2338,7 @@ struct TSFrame : wxFrame {
         auto canvas = static_cast<TSCanvas *>(notebook->GetPage(nbe.GetSelection()));
         ClearStatus();
         sys->TabChange(canvas->doc.get());
+        RevealCurrentDocumentInExplorerIfVisible();
         nbe.Skip();
     }
 
@@ -1788,7 +2478,10 @@ struct TSFrame : wxFrame {
 
     void OnFileSystemEvent(wxFileSystemWatcherEvent &event) {
         // 0xF == create/delete/rename/modify
-        if ((event.GetChangeType() & 0xF) == 0 || watcherwaitingforuser || !notebook) return;
+        if ((event.GetChangeType() & 0xF) == 0 || !notebook) return;
+        if (ExplorerShouldRefreshForEvent(event))
+            ScheduleExplorerRefresh(event.GetNewPath().GetFullPath());
+        if (watcherwaitingforuser) return;
         const auto &modfile = event.GetPath().GetFullPath();
         loop(i, notebook->GetPageCount()) {
             Document *doc = static_cast<TSCanvas *>(notebook->GetPage(i))->doc.get();
