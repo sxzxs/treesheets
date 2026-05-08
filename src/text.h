@@ -97,6 +97,250 @@ struct Text {
                    : pos + 1;
     }
 
+    static constexpr auto display_tab_width = 4;
+
+    static bool IsHighSurrogate(uint code) { return code >= 0xD800 && code <= 0xDBFF; }
+    static bool IsLowSurrogate(uint code) { return code >= 0xDC00 && code <= 0xDFFF; }
+    static uint DecodeSurrogatePair(uint high, uint low) {
+        return 0x10000 + ((high - 0xD800) << 10) + (low - 0xDC00);
+    }
+
+    static bool IsNonCharacter(uint code) {
+        return (code >= 0xFDD0 && code <= 0xFDEF) ||
+               (code <= 0x10FFFF && (code & 0xFFFE) == 0xFFFE);
+    }
+
+    static bool IsInvisibleFormatChar(uint code) {
+        return code == 0x00AD || code == 0x034F || code == 0x061C || code == 0x180E ||
+               code == 0x200B || code == 0x200E || code == 0x200F ||
+               (code >= 0x202A && code <= 0x202E) || (code >= 0x2060 && code <= 0x206F) ||
+               code == 0xFEFF || (code >= 0xFFF9 && code <= 0xFFFB) ||
+               (code >= 0x1BCA0 && code <= 0x1BCA3) || (code >= 0x1D173 && code <= 0x1D17A);
+    }
+
+    static bool IsCombiningMark(uint code) {
+        return (code >= 0x0300 && code <= 0x036F) || (code >= 0x0483 && code <= 0x0489) ||
+               (code >= 0x0591 && code <= 0x05BD) || code == 0x05BF ||
+               (code >= 0x05C1 && code <= 0x05C2) || (code >= 0x05C4 && code <= 0x05C5) ||
+               code == 0x05C7 || (code >= 0x0610 && code <= 0x061A) ||
+               (code >= 0x064B && code <= 0x065F) || code == 0x0670 ||
+               (code >= 0x06D6 && code <= 0x06DC) || (code >= 0x06DF && code <= 0x06E4) ||
+               (code >= 0x06E7 && code <= 0x06E8) || (code >= 0x06EA && code <= 0x06ED) ||
+               code == 0x0711 || (code >= 0x0730 && code <= 0x074A) ||
+               (code >= 0x07A6 && code <= 0x07B0) || (code >= 0x07EB && code <= 0x07F3) ||
+               (code >= 0x0816 && code <= 0x0819) || (code >= 0x081B && code <= 0x0823) ||
+               (code >= 0x0825 && code <= 0x0827) || (code >= 0x0829 && code <= 0x082D) ||
+               (code >= 0x0859 && code <= 0x085B) || (code >= 0x08D3 && code <= 0x08FF) ||
+               (code >= 0x1AB0 && code <= 0x1AFF) || (code >= 0x1DC0 && code <= 0x1DFF) ||
+               (code >= 0x20D0 && code <= 0x20FF) || (code >= 0xFE20 && code <= 0xFE2F);
+    }
+
+    static bool IsVariationSelector(uint code) {
+        return (code >= 0xFE00 && code <= 0xFE0F) || (code >= 0xE0100 && code <= 0xE01EF);
+    }
+
+    static bool IsEmojiModifier(uint code) { return code >= 0x1F3FB && code <= 0x1F3FF; }
+    static bool IsEmojiTag(uint code) { return code >= 0xE0020 && code <= 0xE007F; }
+    static bool IsRegionalIndicator(uint code) { return code >= 0x1F1E6 && code <= 0x1F1FF; }
+
+    static bool IsClusterExtender(uint code) {
+        return IsCombiningMark(code) || IsVariationSelector(code) || IsEmojiModifier(code) ||
+               IsEmojiTag(code) || code == 0x20E3;
+    }
+
+    static bool IsPrintable(uint code) {
+        if (code < 0x20 || (code >= 0x7F && code < 0xA0)) return false;
+        if (IsHighSurrogate(code) || IsLowSurrogate(code)) return false;
+        if (IsNonCharacter(code)) return false;
+        return code <= 0x10FFFF;
+    }
+
+    static wxString HexEscape(uint code) {
+        if (code <= 0xFF) return wxString::Format("\\x%02X", code);
+        if (code <= 0xFFFF) return wxString::Format("\\u%04X", code);
+        return wxString::Format("\\U%08X", code);
+    }
+
+    struct SourceCodePoint {
+        uint code {0};
+        int start {0};
+        int end {0};
+    };
+
+    struct DisplayLine {
+        wxString text;
+        vector<int> sourceendtodisplayend;
+        vector<int> clusterboundaries;
+    };
+
+    static vector<SourceCodePoint> SourceCodePoints(const wxString &source) {
+        vector<SourceCodePoint> points;
+        auto len = static_cast<int>(source.Len());
+        points.reserve(len);
+        for (auto i = 0; i < len;) {
+            auto code = wxUniChar(source[i]).GetValue();
+            auto next = i + 1;
+            if (IsHighSurrogate(code) && next < len) {
+                auto low = wxUniChar(source[next]).GetValue();
+                if (IsLowSurrogate(low)) {
+                    points.push_back({DecodeSurrogatePair(code, low), i, i + 2});
+                    i += 2;
+                    continue;
+                }
+            }
+            points.push_back({code, i, i + 1});
+            i++;
+        }
+        return points;
+    }
+
+    static vector<int> ClusterBoundaries(const wxString &source) {
+        auto points = SourceCodePoints(source);
+        vector<int> boundaries;
+        auto len = static_cast<int>(points.size());
+        boundaries.reserve(len + 1);
+        boundaries.push_back(0);
+        for (auto i = 1; i < len; i++) {
+            auto prev = points[i - 1].code;
+            auto cur = points[i].code;
+            auto join = prev == '\r' && cur == '\n';
+            join = join || IsClusterExtender(cur) || prev == 0x200D || cur == 0x200D;
+            if (IsRegionalIndicator(prev) && IsRegionalIndicator(cur)) {
+                auto ricount = 1;
+                for (auto j = i - 2; j >= 0 && IsRegionalIndicator(points[j].code); j--) ricount++;
+                join = join || ricount % 2 == 1;
+            }
+            if (!join) boundaries.push_back(points[i].start);
+        }
+        boundaries.push_back(static_cast<int>(source.Len()));
+        return boundaries;
+    }
+
+    static bool IsClusterBoundary(const vector<int> &boundaries, int pos) {
+        return std::binary_search(boundaries.begin(), boundaries.end(), pos);
+    }
+
+    static int PreviousClusterBoundary(const vector<int> &boundaries, int pos) {
+        auto it = std::lower_bound(boundaries.begin(), boundaries.end(), pos);
+        if (it == boundaries.begin()) return boundaries.front();
+        return *--it;
+    }
+
+    static int NextClusterBoundary(const vector<int> &boundaries, int pos) {
+        auto it = std::upper_bound(boundaries.begin(), boundaries.end(), pos);
+        return it == boundaries.end() ? boundaries.back() : *it;
+    }
+
+    static void AppendDisplay(DisplayLine &display, const wxString &append, int &displaycols) {
+        display.text += append;
+        displaycols += static_cast<int>(append.Len());
+    }
+
+    static void AppendDisplayChar(DisplayLine &display, uint code, const wxString &source,
+                                  int &displaycols) {
+        switch (code) {
+            case 0: AppendDisplay(display, "\\0", displaycols); return;
+            case '\b': AppendDisplay(display, "\\b", displaycols); return;
+            case '\t': {
+                auto spaces = display_tab_width - displaycols % display_tab_width;
+                display.text += wxString(' ', spaces);
+                displaycols += spaces;
+                return;
+            }
+            case '\n': AppendDisplay(display, "\\n", displaycols); return;
+            case '\r': AppendDisplay(display, "\\r", displaycols); return;
+            case '\f': AppendDisplay(display, "\\f", displaycols); return;
+            case '\v': AppendDisplay(display, "\\v", displaycols); return;
+        }
+        if (!IsPrintable(code) || IsInvisibleFormatChar(code)) {
+            AppendDisplay(display, HexEscape(code), displaycols);
+        } else {
+            display.text += source;
+            displaycols++;
+        }
+    }
+
+    static DisplayLine BuildDisplayLine(const wxString &source) {
+        DisplayLine display;
+        auto displaycols = 0;
+        auto sourcelen = static_cast<int>(source.Len());
+        display.sourceendtodisplayend.resize(sourcelen + 1);
+        display.clusterboundaries = ClusterBoundaries(source);
+        for (auto point : SourceCodePoints(source)) {
+            AppendDisplayChar(display, point.code, source.Mid(point.start, point.end - point.start),
+                              displaycols);
+            auto displayend = static_cast<int>(display.text.Len());
+            for (auto i = point.start + 1; i <= point.end; i++)
+                display.sourceendtodisplayend[i] = displayend;
+        }
+        return display;
+    }
+
+    static int DisplayIndexWidth(auto &dc, const DisplayLine &display, int displaychars) {
+        displaychars = max(0, min(displaychars, static_cast<int>(display.text.Len())));
+        if (!displaychars) return 0;
+        wxArrayInt widths;
+        if (dc.GetPartialTextExtents(display.text, widths) &&
+            static_cast<int>(widths.size()) >= displaychars)
+            return widths[displaychars - 1];
+        auto x = 0;
+        dc.GetTextExtent(display.text.Left(displaychars), &x, nullptr);
+        return x;
+    }
+
+    static int DisplayPrefixWidth(auto &dc, const DisplayLine &display, int sourcechars) {
+        sourcechars =
+            max(0, min(sourcechars, static_cast<int>(display.sourceendtodisplayend.size()) - 1));
+        if (!IsClusterBoundary(display.clusterboundaries, sourcechars))
+            sourcechars = PreviousClusterBoundary(display.clusterboundaries, sourcechars);
+        return DisplayIndexWidth(dc, display, display.sourceendtodisplayend[sourcechars]);
+    }
+
+    static int SourceCursorFromDisplayX(auto &dc, const DisplayLine &display, int xlimit) {
+        if (xlimit <= 0) return 0;
+        auto beforex = 0;
+        for (auto i = 1; i < static_cast<int>(display.clusterboundaries.size()); i++) {
+            auto afterpos = display.clusterboundaries[i];
+            auto beforepos = display.clusterboundaries[i - 1];
+            auto afterx = DisplayPrefixWidth(dc, display, afterpos);
+            if (afterx >= xlimit) {
+                return xlimit - beforex < afterx - xlimit ? beforepos : afterpos;
+            }
+            beforex = afterx;
+        }
+        return display.clusterboundaries.back();
+    }
+
+    static int PreviousCursorPos(const wxString &source, int pos) {
+        auto boundaries = ClusterBoundaries(source);
+        pos = max(0, min(pos, static_cast<int>(source.Len())));
+        return PreviousClusterBoundary(boundaries, pos);
+    }
+
+    static int NextCursorPos(const wxString &source, int pos) {
+        auto boundaries = ClusterBoundaries(source);
+        pos = max(0, min(pos, static_cast<int>(source.Len())));
+        return NextClusterBoundary(boundaries, pos);
+    }
+
+    static int AdjacentCursorPos(const wxString &source, int pos, int dir) {
+        return dir < 0 ? PreviousCursorPos(source, pos) : NextCursorPos(source, pos);
+    }
+
+    static int NearestCursorPos(const wxString &source, int pos) {
+        auto boundaries = ClusterBoundaries(source);
+        pos = max(0, min(pos, static_cast<int>(source.Len())));
+        if (IsClusterBoundary(boundaries, pos)) return pos;
+        auto prev = PreviousClusterBoundary(boundaries, pos);
+        auto next = NextClusterBoundary(boundaries, pos);
+        return pos - prev < next - pos ? prev : next;
+    }
+
+    int PreviousCursorPos(int pos) const { return PreviousCursorPos(t, pos); }
+    int NextCursorPos(int pos) const { return NextCursorPos(t, pos); }
+    int AdjacentCursorPos(int pos, int dir) const { return AdjacentCursorPos(t, pos, dir); }
+    int NearestCursorPos(int pos) const { return NearestCursorPos(t, pos); }
+
     struct Line {
         wxString text;
         int start {0};
@@ -197,15 +441,16 @@ struct Text {
             Line line;
             if (!GetLine(i, maxcolwidth, line)) break;
             auto &curl = line.text;
+            auto display = BuildDisplayLine(curl);
             int x, y;
             if (tiny) {
-                x = static_cast<int>(curl.Len());
+                x = static_cast<int>(display.text.Len());
                 y = 1;
-            } else if (curl.empty()) {
+            } else if (display.text.empty()) {
                 x = 0;
                 y = dc.GetCharHeight();
             } else
-                dc.GetTextExtent(curl, &x, &y);
+                dc.GetTextExtent(display.text, &x, &y);
             sx = max(x, sx);
             sy += y;
             leftoffset = y;
@@ -255,18 +500,19 @@ struct Text {
             Line line;
             if (!GetLine(i, maxcolwidth, line)) break;
             auto &curl = line.text;
+            auto display = BuildDisplayLine(curl);
             if (cell->tiny) {
                 if (sys->fastrender) {
-                    dc.DrawLine(bx + ixs, by + lines * h, bx + ixs + static_cast<int>(curl.Len()),
-                                by + lines * h);
+                    dc.DrawLine(bx + ixs, by + lines * h,
+                                bx + ixs + static_cast<int>(display.text.Len()), by + lines * h);
                     /*
                     wxPoint points[] = { wxPoint(bx + ixs, by + lines * h), wxPoint(bx + ixs +
                     curl.Len(), by + lines * h) }; dc.DrawLines(1, points, 0, 0);
                      */
                 } else {
                     auto word = 0;
-                    loop(p, static_cast<int>(curl.Len()) + 1) {
-                        if (static_cast<int>(curl.Len()) <= p || curl[p] == ' ') {
+                    loop(p, static_cast<int>(display.text.Len()) + 1) {
+                        if (static_cast<int>(display.text.Len()) <= p || display.text[p] == ' ') {
                             if (word)
                                 dc.DrawLine(bx + p - word + ixs, by + lines * h, bx + p,
                                             by + lines * h);
@@ -286,7 +532,7 @@ struct Text {
                     dc.SetTextForeground(LightColor(cell->textcolor));  // FIXME: clean up
                 auto tx = bx + 2 + ixs;
                 auto ty = by + lines * h;
-                dc.DrawText(curl, tx + g_margin_extra, ty + g_margin_extra);
+                dc.DrawText(display.text, tx + g_margin_extra, ty + g_margin_extra);
                 if (searchfound || filtered || istag || cell->textcolor)
                     dc.SetTextForeground(LightColor(0x000000));
             }
@@ -296,7 +542,8 @@ struct Text {
         return max(lines * h, iys);
     }
 
-    void FindCursor(Document *doc, int bx, int by, wxReadOnlyDC &dc, Selection &s, int maxcolwidth) {
+    void FindCursor(Document *doc, int bx, int by, wxReadOnlyDC &dc, Selection &s,
+                    int maxcolwidth) {
         bx -= g_margin_extra;
         by -= g_margin_extra;
 
@@ -321,14 +568,8 @@ struct Text {
             ls = lineinfo.text;
         }
 
-        for (;;) {
-            auto x = 0, y = 0;
-            dc.GetTextExtent(ls, &x, &y);  // FIXME: can we do this more intelligently?
-            if (x <= bx - ixs + 2 || !x) break;
-            ls.Truncate(ls.Len() - 1);
-        }
-
-        s.cursor = s.cursorend = linestart + static_cast<int>(ls.Len());
+        auto display = BuildDisplayLine(ls);
+        s.cursor = s.cursorend = linestart + SourceCursorFromDisplayX(dc, display, bx - ixs + 2);
         ASSERT(s.cursor >= 0 && s.cursor <= static_cast<int>(t.Len()));
     }
 
@@ -345,16 +586,13 @@ struct Text {
                 if (!GetLine(i, maxcolwidth, line)) break;
                 auto start = line.start;
                 auto ls = line.text;
-                auto len = static_cast<int>(ls.Len());
+                auto display = BuildDisplayLine(ls);
                 auto end = line.end;
 
                 if (s.cursor != s.cursorend) {
                     if (s.cursor <= end && s.cursorend >= start) {
-                        ls.Truncate(min(s.cursorend, end) - start);
-                        auto x1 = 0, x2 = 0;
-                        dc.GetTextExtent(ls, &x2, nullptr);
-                        ls.Truncate(max(s.cursor, start) - start);
-                        dc.GetTextExtent(ls, &x1, nullptr);
+                        auto x2 = DisplayPrefixWidth(dc, display, min(s.cursorend, end) - start);
+                        auto x1 = DisplayPrefixWidth(dc, display, max(s.cursor, start) - start);
                         if (x1 != x2) {
                             int startx = cell->GetX(doc) + x1 + 2 + ixs + g_margin_extra;
                             int starty =
@@ -364,9 +602,7 @@ struct Text {
                         }
                     }
                 } else if (s.cursor >= start && s.cursor <= end) {
-                    ls.Truncate(s.cursor - start);
-                    auto x = 0;
-                    dc.GetTextExtent(ls, &x, nullptr);
+                    auto x = DisplayPrefixWidth(dc, display, s.cursor - start);
                     int startx = cell->GetX(doc) + x + 1 + ixs + g_margin_extra;
                     int starty = cell->GetY(doc) + l * h + 1 + cell->ycenteroff + g_margin_extra;
                     DrawRectangle(dc, color, startx, starty, 2, h - 2);
@@ -440,13 +676,17 @@ struct Text {
 
     void Delete(Selection &s) {
         if (!RangeSelRemove(s))
-            if (s.cursor < static_cast<int>(t.Len())) { t.Remove(s.cursor, 1); };
+            if (s.cursor < static_cast<int>(t.Len())) {
+                auto next = NextCursorPos(s.cursor);
+                t.Remove(s.cursor, next - s.cursor);
+            };
     }
     void Backspace(Selection &s) {
         if (!RangeSelRemove(s))
             if (s.cursor > 0) {
-                t.Remove(--s.cursor, 1);
-                --s.cursorend;
+                auto prev = PreviousCursorPos(s.cursor);
+                t.Remove(prev, s.cursor - prev);
+                s.cursor = s.cursorend = prev;
             };
     }
     void DeleteWord(Selection &s) {

@@ -161,6 +161,7 @@ class Selection {
                         if (chtype < allowed) allowed = -chtype;
                     }
                 }
+                curs = GetCell()->text.NearestCursorPos(curs);
                 if (shift) {
                     if (cursorend < cursor) swap_(cursorend, cursor);
                 } else
@@ -168,7 +169,8 @@ class Selection {
             } else if (shift) {
                 if (textedit) {
                     if (cursor == cursorend) firstdx = dx;
-                    (firstdx < 0 ? cursor : cursorend) += dx;
+                    int &curs = firstdx < 0 ? cursor : cursorend;
+                    if (dx) curs = GetCell()->text.AdjacentCursorPos(curs, dx);
                     if (cursor < 0) cursor = 0;
                     if (cursorend > MaxCursor()) cursorend = MaxCursor();
                 } else {
@@ -224,8 +226,8 @@ class Selection {
                                     int end = line.end;
 
                                     if (nextoffset >= 0) {
-                                        cursor = cursorend =
-                                            start + (nextoffset > len ? len : nextoffset);
+                                        cursor = cursorend = text.NearestCursorPos(
+                                            start + (nextoffset > len ? len : nextoffset));
                                         intracell = false;
                                         break;
                                     }
@@ -233,10 +235,10 @@ class Selection {
                                     if (cursor >= start && cursor <= end) {
                                         if (dy < 0) {
                                             if (l != 0) {
-                                                cursor = cursorend =
+                                                cursor = cursorend = text.NearestCursorPos(
                                                     laststart + (cursor - start > lastlen
                                                                      ? lastlen
-                                                                     : cursor - start);
+                                                                     : cursor - start));
                                                 intracell = false;
                                             }
                                             break;
@@ -258,7 +260,8 @@ class Selection {
                                         cursor = cursorend;
                                 } else {
                                     if ((dx < 0 && cursor) || (dx > 0 && MaxCursor() > cursor))
-                                        cursorend = cursor += dx;
+                                        cursorend = cursor =
+                                            GetCell()->text.AdjacentCursorPos(cursor, dx);
                                 }
                             }
                         }
