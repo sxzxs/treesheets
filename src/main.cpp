@@ -276,6 +276,7 @@ enum {
     A_NOP,
     A_MERGECELLS,
     A_UNMERGECELLS,
+    A_TRAY_RESTORE,
     A_TAGSET = 1000,  // and all values from here on
     #ifdef ENABLE_LOBSTER
         A_SCRIPT = 2000,  // and all values from here on

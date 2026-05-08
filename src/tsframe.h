@@ -107,6 +107,9 @@ struct TSFrame : wxFrame {
         else
             taskbaricon.Connect(wxID_ANY, wxEVT_TASKBAR_LEFT_DCLICK,
                         wxTaskBarIconEventHandler(TSFrame::OnTBIDBLClick), nullptr, this);
+        taskbaricon.Connect(wxID_ANY, wxEVT_TASKBAR_RIGHT_UP,
+                    wxTaskBarIconEventHandler(TSFrame::OnTrayMenu), nullptr, this);
+        UpdateTrayIcon();
 
         bool showtbar, showsbar, lefttabs;
 
@@ -2227,7 +2230,10 @@ struct TSFrame : wxFrame {
             case A_LEFTTABS: Check("lefttabs"); break;
             case A_SINGLETRAY: Check("singletray"); break;
             case A_MAKEBAKS: sys->cfg->Write("makebaks", sys->makebaks = ce.IsChecked()); break;
-            case A_TOTRAY: sys->cfg->Write("totray", sys->totray = ce.IsChecked()); break;
+            case A_TOTRAY:
+                sys->cfg->Write("totray", sys->totray = ce.IsChecked());
+                UpdateTrayIcon();
+                break;
             case A_MINCLOSE: sys->cfg->Write("minclose", sys->minclose = ce.IsChecked()); break;
             case A_STARTMINIMIZED:
                 sys->cfg->Write("startminimized", sys->startminimized = ce.IsChecked());
@@ -2386,7 +2392,7 @@ struct TSFrame : wxFrame {
         if (me.IsIconized()) {
             #ifndef __WXMAC__
             if (sys->totray) {
-                taskbaricon.SetIcon(icon, "TreeSheets");
+                UpdateTrayIcon();
                 Show(false);
                 Iconize();
             }
@@ -2402,6 +2408,49 @@ struct TSFrame : wxFrame {
     }
 
     void OnTBIDBLClick(wxTaskBarIconEvent &e) { DeIconize(); }
+
+    void UpdateTrayIcon() {
+        #ifndef __WXMAC__
+        if (sys->totray) {
+            taskbaricon.SetIcon(icon, "TreeSheets");
+        } else if (taskbaricon.IsIconInstalled()) {
+            taskbaricon.RemoveIcon();
+        }
+        #endif
+    }
+
+    void OnTrayMenu(wxTaskBarIconEvent &) {
+        wxMenu menu;
+        MyAppend(&menu, A_TRAY_RESTORE,
+                 IsShown() && !IsIconized() ? _("&Hide to Tray") : _("&Restore"));
+        menu.AppendSeparator();
+        MyAppend(&menu, wxID_NEW, _("&New") + "\tCTRL+N");
+        MyAppend(&menu, wxID_OPEN, _("&Open...") + "\tCTRL+O");
+        menu.AppendSeparator();
+        MyAppend(&menu, wxID_SAVE, _("&Save") + "\tCTRL+S");
+        MyAppend(&menu, A_SAVEALL, _("Save All"));
+        menu.AppendSeparator();
+        MyAppend(&menu, wxID_EXIT, _("&Exit") + "\tCTRL+Q");
+        menu.Bind(wxEVT_MENU, &TSFrame::OnTrayMenuCommand, this);
+        taskbaricon.PopupMenu(&menu);
+    }
+
+    void OnTrayMenuCommand(wxCommandEvent &ce) {
+        switch (ce.GetId()) {
+            case A_TRAY_RESTORE:
+                if (IsShown() && !IsIconized())
+                    Iconize(true);
+                else
+                    DeIconize();
+                break;
+            case wxID_NEW:
+            case wxID_OPEN:
+                DeIconize();
+                OnMenu(ce);
+                break;
+            default: OnMenu(ce); break;
+        }
+    }
 
     void OnClosing(wxCloseEvent &ce) {
         bool fcb = fromclosebox;
@@ -2553,7 +2602,7 @@ struct TSFrame : wxFrame {
         }
         Show(true);
         Iconize(false);
-        taskbaricon.RemoveIcon();
+        UpdateTrayIcon();
     }
 
     TSCanvas *GetCurrentTab() {
