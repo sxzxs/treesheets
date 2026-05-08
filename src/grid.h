@@ -858,8 +858,9 @@ struct Grid {
                     for (int i = 1;; i++) {
                         if (!s[i]) {
                             if (y < static_cast<int>(as.size()) - 1) {
+                                word += LINE_SEPARATOR;
                                 s = as[++y];
-                                i = 0;
+                                i = -1;
                             } else {
                                 s = L"";
                                 break;

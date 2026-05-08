@@ -1567,19 +1567,34 @@ struct Document {
             case wxID_PASTE:
                 if (!(cell = selected.ThinExpand(this))) return OneCell();
                 if (wxTheClipboard->Open()) {
-                    if (wxTheClipboard->IsSupported(wxDF_BITMAP)) {
-                        wxBitmapDataObject bdo;
-                        wxTheClipboard->GetData(bdo);
-                        PasteOrDrop(bdo);
-                    } else if (wxTheClipboard->IsSupported(wxDF_FILENAME)) {
+                    if (wxTheClipboard->IsSupported(wxDF_FILENAME)) {
                         wxFileDataObject fdo;
                         wxTheClipboard->GetData(fdo);
                         PasteOrDrop(fdo);
-                    } else if (wxTheClipboard->IsSupported(wxDF_TEXT) ||
-                               wxTheClipboard->IsSupported(wxDF_UNICODETEXT)) {
+                    } else {
                         wxTextDataObject tdo;
-                        wxTheClipboard->GetData(tdo);
-                        PasteOrDrop(tdo);
+                        bool hastext = wxTheClipboard->IsSupported(wxDF_TEXT) ||
+                                       wxTheClipboard->IsSupported(wxDF_UNICODETEXT);
+                        if (hastext) wxTheClipboard->GetData(tdo);
+
+                        bool pasted = false;
+                        if (hastext && (sys->clipboardcopy == tdo.GetText()) &&
+                            sys->cellclipboard) {
+                            PasteOrDrop(tdo);
+                            pasted = true;
+                        } else if (!selected.TextEdit() && wxTheClipboard->IsSupported(wxDF_HTML)) {
+                            wxHTMLDataObject hdo;
+                            if (wxTheClipboard->GetData(hdo)) pasted = PasteOrDrop(hdo);
+                        }
+                        if (!pasted && hastext) {
+                            PasteOrDrop(tdo);
+                            pasted = true;
+                        }
+                        if (!pasted && wxTheClipboard->IsSupported(wxDF_BITMAP)) {
+                            wxBitmapDataObject bdo;
+                            wxTheClipboard->GetData(bdo);
+                            PasteOrDrop(bdo);
+                        }
                     }
                     wxTheClipboard->Close();
                     canvas->Refresh();
@@ -2124,6 +2139,738 @@ struct Document {
         if (!WalkPath(drawpath)->grid) Zoom(-1);
     }
 
+    struct HTMLCellStyle {
+        bool hascellcolor {false};
+        bool hastextcolor {false};
+        bool hasstylebits {false};
+        bool hasrelsize {false};
+        uint cellcolor {g_cellcolor_default};
+        uint textcolor {g_textcolor_default};
+        int stylebits {0};
+        int relsize {0};
+    };
+
+    struct HTMLTableCell {
+        wxString text;
+        HTMLCellStyle style;
+        int colspan {1};
+        int rowspan {1};
+    };
+
+    struct HTMLTablePlacement {
+        wxString text;
+        HTMLCellStyle style;
+        int x {0};
+        int y {0};
+        int xs {1};
+        int ys {1};
+    };
+
+    static bool IsHTMLSpace(wxChar c) {
+        return c == ' ' || c == '\n' || c == '\r' || c == '\t' || c == '\f';
+    }
+
+    static bool IsHTMLNameChar(wxChar c) {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+               (c >= '0' && c <= '9') || c == '-' || c == '_' || c == ':';
+    }
+
+    static wxString TrimHTMLText(wxString s) {
+        s.Trim(true);
+        s.Trim(false);
+        return s;
+    }
+
+    static int FindFrom(const wxString &s, const wxString &needle, int start) {
+        if (needle.IsEmpty()) return wxNOT_FOUND;
+        auto len = static_cast<int>(s.Len());
+        if (start < 0) start = 0;
+        if (start >= len) return wxNOT_FOUND;
+        auto pos = s.Mid(start).Find(needle);
+        return pos == wxNOT_FOUND ? wxNOT_FOUND : start + pos;
+    }
+
+    static int FindHTMLTagEnd(const wxString &html, int start) {
+        wxChar quote = 0;
+        for (auto i = start, len = static_cast<int>(html.Len()); i < len; i++) {
+            auto c = html[i];
+            if (quote) {
+                if (c == quote) quote = 0;
+            } else if (c == '"' || c == '\'') {
+                quote = c;
+            } else if (c == '>') {
+                return i;
+            }
+        }
+        return wxNOT_FOUND;
+    }
+
+    static int FindHTMLTag(const wxString &lower, const wxString &tag, int start,
+                           int limit = -1, bool closing = false) {
+        auto len = static_cast<int>(lower.Len());
+        if (limit < 0 || limit > len) limit = len;
+        wxString pattern = closing ? wxString("</") + tag : wxString("<") + tag;
+        for (auto pos = FindFrom(lower, pattern, start); pos != wxNOT_FOUND && pos < limit;
+             pos = FindFrom(lower, pattern, pos + 1)) {
+            auto after = pos + static_cast<int>(pattern.Len());
+            if (after >= len || !IsHTMLNameChar(lower[after])) return pos;
+        }
+        return wxNOT_FOUND;
+    }
+
+    static wxString HTMLTagName(const wxString &tag) {
+        auto lower = tag.Lower();
+        auto len = static_cast<int>(lower.Len());
+        auto i = 0;
+        if (i < len && lower[i] == '<') i++;
+        while (i < len && IsHTMLSpace(lower[i])) i++;
+        if (i < len && lower[i] == '/') i++;
+        while (i < len && IsHTMLSpace(lower[i])) i++;
+        auto start = i;
+        while (i < len && IsHTMLNameChar(lower[i])) i++;
+        return lower.Mid(start, i - start);
+    }
+
+    static bool IsHTMLClosingTag(const wxString &tag) {
+        auto lower = tag.Lower();
+        auto len = static_cast<int>(lower.Len());
+        auto i = 0;
+        if (i < len && lower[i] == '<') i++;
+        while (i < len && IsHTMLSpace(lower[i])) i++;
+        return i < len && lower[i] == '/';
+    }
+
+    static bool HTMLAttributeValue(const wxString &tag, const wxString &attribute,
+                                   wxString &value) {
+        auto lower = tag.Lower();
+        auto attr = attribute.Lower();
+        auto len = static_cast<int>(lower.Len());
+        for (auto pos = FindFrom(lower, attr, 0); pos != wxNOT_FOUND;
+             pos = FindFrom(lower, attr, pos + 1)) {
+            auto before = pos == 0 || !IsHTMLNameChar(lower[pos - 1]);
+            auto after = pos + static_cast<int>(attr.Len());
+            if (!before || (after < len && IsHTMLNameChar(lower[after]))) continue;
+            while (after < len && IsHTMLSpace(lower[after])) after++;
+            if (after >= len || lower[after] != '=') continue;
+            after++;
+            while (after < len && IsHTMLSpace(lower[after])) after++;
+
+            wxChar quote = 0;
+            if (after < len && (tag[after] == '"' || tag[after] == '\'')) quote = tag[after++];
+            auto start = after;
+            while (after < len &&
+                   (quote ? tag[after] != quote
+                          : (!IsHTMLSpace(tag[after]) && tag[after] != '>'))) {
+                after++;
+            }
+
+            value = TrimHTMLText(tag.Mid(start, after - start));
+            return true;
+        }
+        return false;
+    }
+
+    static int HTMLAttributeInt(const wxString &tag, const wxString &attribute, int def = 1) {
+        wxString text;
+        if (HTMLAttributeValue(tag, attribute, text)) {
+            long value = def;
+            if (text.ToLong(&value) && value > 0) return static_cast<int>(min<long>(value, 1000));
+        }
+        return def;
+    }
+
+    static void AddCSSDeclarations(const wxString &declarations, map<wxString, wxString> &props) {
+        auto len = static_cast<int>(declarations.Len());
+        auto start = 0;
+        wxChar quote = 0;
+        auto addsegment = [&](int end) {
+            auto segment = declarations.Mid(start, end - start);
+            wxChar propquote = 0;
+            auto colon = wxNOT_FOUND;
+            for (auto i = 0, slen = static_cast<int>(segment.Len()); i < slen; i++) {
+                auto c = segment[i];
+                if (propquote) {
+                    if (c == propquote) propquote = 0;
+                } else if (c == '"' || c == '\'') {
+                    propquote = c;
+                } else if (c == ':') {
+                    colon = i;
+                    break;
+                }
+            }
+            if (colon == wxNOT_FOUND) return;
+            auto prop = TrimHTMLText(segment.Left(colon)).Lower();
+            auto value = TrimHTMLText(segment.Mid(colon + 1));
+            value.Replace("!important", "");
+            value = TrimHTMLText(value);
+            if (!prop.IsEmpty()) props[prop] = value;
+        };
+
+        for (auto i = 0; i <= len; i++) {
+            wxChar c = i < len ? wxChar(declarations[i]) : wxChar(';');
+            if (quote) {
+                if (c == quote) quote = 0;
+            } else if (c == '"' || c == '\'') {
+                quote = c;
+            } else if (c == ';' || i == len) {
+                addsegment(i);
+                start = i + 1;
+            }
+        }
+    }
+
+    static map<wxString, wxString> ExtractHTMLClassStyles(const wxString &html) {
+        map<wxString, wxString> classstyles;
+        auto lower = html.Lower();
+        for (auto stylepos = FindHTMLTag(lower, "style", 0); stylepos != wxNOT_FOUND;
+             stylepos = FindHTMLTag(lower, "style", stylepos + 1)) {
+            auto styleopenend = FindHTMLTagEnd(html, stylepos);
+            if (styleopenend == wxNOT_FOUND) break;
+            auto styleend = FindHTMLTag(lower, "style", styleopenend + 1, -1, true);
+            if (styleend == wxNOT_FOUND) break;
+
+            auto css = html.Mid(styleopenend + 1, styleend - styleopenend - 1);
+            for (auto pos = 0;;) {
+                auto brace = FindFrom(css, "{", pos);
+                if (brace == wxNOT_FOUND) break;
+                auto endbrace = FindFrom(css, "}", brace + 1);
+                if (endbrace == wxNOT_FOUND) break;
+                auto selector = css.Mid(pos, brace - pos);
+                auto body = css.Mid(brace + 1, endbrace - brace - 1);
+                for (auto dot = FindFrom(selector, ".", 0); dot != wxNOT_FOUND;
+                     dot = FindFrom(selector, ".", dot + 1)) {
+                    auto namepos = dot + 1;
+                    while (namepos < static_cast<int>(selector.Len()) &&
+                           IsHTMLNameChar(selector[namepos]))
+                        namepos++;
+                    auto name = selector.Mid(dot + 1, namepos - dot - 1).Lower();
+                    if (!name.IsEmpty()) {
+                        if (!classstyles[name].IsEmpty()) classstyles[name] += ";";
+                        classstyles[name] += body;
+                    }
+                }
+                pos = endbrace + 1;
+            }
+        }
+        return classstyles;
+    }
+
+    static int HexDigit(wxChar c) {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+        return -1;
+    }
+
+    static bool ParseCSSHexColor(const wxString &value, uint &rgb) {
+        auto hash = value.Find('#');
+        if (hash == wxNOT_FOUND) return false;
+        auto pos = hash + 1;
+        auto len = static_cast<int>(value.Len());
+        auto end = pos;
+        while (end < len && HexDigit(value[end]) >= 0) end++;
+        auto count = end - pos;
+        if (count >= 6) {
+            unsigned long parsed = 0;
+            if (!value.Mid(pos, 6).ToULong(&parsed, 16)) return false;
+            rgb = static_cast<uint>(parsed & 0xFFFFFF);
+            return true;
+        }
+        if (count == 3) {
+            auto r = HexDigit(value[pos]);
+            auto g = HexDigit(value[pos + 1]);
+            auto b = HexDigit(value[pos + 2]);
+            if (r < 0 || g < 0 || b < 0) return false;
+            rgb = static_cast<uint>((r * 17) << 16 | (g * 17) << 8 | (b * 17));
+            return true;
+        }
+        return false;
+    }
+
+    static bool CSSColorByte(wxString token, int &byte) {
+        token = TrimHTMLText(token);
+        auto percent = token.EndsWith("%");
+        if (percent) token.RemoveLast();
+        double value = 0;
+        if (!token.ToDouble(&value)) return false;
+        if (percent) value = value * 255.0 / 100.0;
+        byte = max(0, min(255, static_cast<int>(value + 0.5)));
+        return true;
+    }
+
+    static bool ParseCSSRGBColor(const wxString &value, uint &rgb) {
+        auto lower = value.Lower();
+        auto rgbpos = FindFrom(lower, "rgb", 0);
+        if (rgbpos == wxNOT_FOUND) return false;
+        auto open = FindFrom(lower, "(", rgbpos);
+        auto close = open == wxNOT_FOUND ? wxNOT_FOUND : FindFrom(lower, ")", open + 1);
+        if (open == wxNOT_FOUND || close == wxNOT_FOUND) return false;
+        auto parts = wxStringTokenize(lower.Mid(open + 1, close - open - 1), ", \t\r\n");
+        if (parts.size() < 3) return false;
+        int r = 0;
+        int g = 0;
+        int b = 0;
+        if (!CSSColorByte(parts[0], r) || !CSSColorByte(parts[1], g) ||
+            !CSSColorByte(parts[2], b))
+            return false;
+        rgb = static_cast<uint>((r << 16) | (g << 8) | b);
+        return true;
+    }
+
+    static bool NamedCSSColor(const wxString &name, uint &rgb) {
+        static const map<wxString, uint> colors {
+            {"aqua", 0x00FFFF},       {"black", 0x000000},     {"blue", 0x0000FF},
+            {"cyan", 0x00FFFF},       {"fuchsia", 0xFF00FF},   {"gray", 0x808080},
+            {"grey", 0x808080},       {"green", 0x008000},     {"lime", 0x00FF00},
+            {"maroon", 0x800000},     {"navy", 0x000080},      {"olive", 0x808000},
+            {"purple", 0x800080},     {"red", 0xFF0000},       {"silver", 0xC0C0C0},
+            {"teal", 0x008080},       {"white", 0xFFFFFF},     {"windowtext", 0x000000},
+            {"yellow", 0xFFFF00},
+        };
+        auto it = colors.find(name.Lower());
+        if (it == colors.end()) return false;
+        rgb = it->second;
+        return true;
+    }
+
+    static bool ParseCSSColor(wxString value, uint &color) {
+        value.Replace("!important", "");
+        value = TrimHTMLText(value);
+        auto lower = value.Lower();
+        if (lower.Find("transparent") != wxNOT_FOUND || lower == "none" ||
+            lower == "automatic")
+            return false;
+
+        uint rgb = 0;
+        if (ParseCSSHexColor(lower, rgb) || ParseCSSRGBColor(lower, rgb)) {
+            color = SwapColor(rgb);
+            return true;
+        }
+
+        auto tokens = wxStringTokenize(lower, " \t\r\n,;/");
+        loop(i, tokens.size()) {
+            if (NamedCSSColor(tokens[i], rgb)) {
+                color = SwapColor(rgb);
+                return true;
+            }
+        }
+        return NamedCSSColor(lower, rgb) ? (color = SwapColor(rgb), true) : false;
+    }
+
+    static bool ParseCSSLengthPoints(wxString value, double &points) {
+        value = TrimHTMLText(value.Lower());
+        auto start = 0;
+        auto len = static_cast<int>(value.Len());
+        while (start < len && !(value[start] == '-' || value[start] == '+' ||
+                                value[start] == '.' || (value[start] >= '0' && value[start] <= '9')))
+            start++;
+        auto end = start;
+        while (end < len && (value[end] == '-' || value[end] == '+' || value[end] == '.' ||
+                             (value[end] >= '0' && value[end] <= '9')))
+            end++;
+        if (start == end) return false;
+        double number = 0;
+        if (!value.Mid(start, end - start).ToDouble(&number)) return false;
+        auto unit = TrimHTMLText(value.Mid(end));
+        if (unit.StartsWith("px"))
+            points = number * 72.0 / 96.0;
+        else if (unit.StartsWith("pt") || unit.IsEmpty())
+            points = number;
+        else
+            return false;
+        return points > 0;
+    }
+
+    static void ApplyCSSPropsToStyle(const map<wxString, wxString> &props, HTMLCellStyle &style) {
+        auto setcolor = [&](const wxString &property, bool text) {
+            auto it = props.find(property);
+            if (it == props.end()) return;
+            uint color = 0;
+            if (!ParseCSSColor(it->second, color)) return;
+            if (text) {
+                style.hastextcolor = true;
+                style.textcolor = color;
+            } else {
+                style.hascellcolor = true;
+                style.cellcolor = color;
+            }
+        };
+
+        setcolor("background", false);
+        setcolor("background-color", false);
+        setcolor("color", true);
+
+        auto weight = props.find("font-weight");
+        if (weight != props.end()) {
+            style.hasstylebits = true;
+            auto value = weight->second.Lower();
+            long numeric = 0;
+            if (value.Find("bold") != wxNOT_FOUND ||
+                (TrimHTMLText(value).ToLong(&numeric) && numeric >= 600))
+                style.stylebits |= STYLE_BOLD;
+            else
+                style.stylebits &= ~STYLE_BOLD;
+        }
+
+        auto fontstyle = props.find("font-style");
+        if (fontstyle != props.end()) {
+            style.hasstylebits = true;
+            auto value = fontstyle->second.Lower();
+            if (value.Find("italic") != wxNOT_FOUND || value.Find("oblique") != wxNOT_FOUND)
+                style.stylebits |= STYLE_ITALIC;
+            else
+                style.stylebits &= ~STYLE_ITALIC;
+        }
+
+        auto decoration = props.find("text-decoration");
+        if (decoration != props.end()) {
+            style.hasstylebits = true;
+            auto value = decoration->second.Lower();
+            if (value.Find("underline") != wxNOT_FOUND)
+                style.stylebits |= STYLE_UNDERLINE;
+            else
+                style.stylebits &= ~STYLE_UNDERLINE;
+            if (value.Find("line-through") != wxNOT_FOUND)
+                style.stylebits |= STYLE_STRIKETHRU;
+            else
+                style.stylebits &= ~STYLE_STRIKETHRU;
+        }
+
+        auto family = props.find("font-family");
+        if (family != props.end()) {
+            auto value = family->second.Lower();
+            if (value.Find("monospace") != wxNOT_FOUND || value.Find("courier") != wxNOT_FOUND ||
+                value.Find("consolas") != wxNOT_FOUND) {
+                style.hasstylebits = true;
+                style.stylebits |= STYLE_FIXED;
+            }
+        }
+
+        auto fontsize = props.find("font-size");
+        if (fontsize != props.end()) {
+            double points = 0;
+            if (ParseCSSLengthPoints(fontsize->second, points)) {
+                auto minrel = g_deftextsize - g_maxtextsize();
+                auto maxrel = g_deftextsize - g_mintextsize();
+                style.hasrelsize = true;
+                style.relsize =
+                    max(minrel, min(maxrel, g_deftextsize - static_cast<int>(points + 0.5)));
+            }
+        }
+    }
+
+    static void ApplyHTMLStartTagStyle(const wxString &tag, const map<wxString, wxString> &classstyles,
+                                       HTMLCellStyle &style) {
+        map<wxString, wxString> props;
+        wxString classes;
+        if (HTMLAttributeValue(tag, "class", classes)) {
+            auto classtokens = wxStringTokenize(classes, " \t\r\n");
+            loop(i, classtokens.size()) {
+                auto it = classstyles.find(classtokens[i].Lower());
+                if (it != classstyles.end()) AddCSSDeclarations(it->second, props);
+            }
+        }
+        wxString inline_style;
+        if (HTMLAttributeValue(tag, "style", inline_style)) AddCSSDeclarations(inline_style, props);
+        ApplyCSSPropsToStyle(props, style);
+
+        wxString color;
+        if (HTMLAttributeValue(tag, "bgcolor", color) && ParseCSSColor(color, style.cellcolor))
+            style.hascellcolor = true;
+        if (HTMLAttributeValue(tag, "color", color) && ParseCSSColor(color, style.textcolor))
+            style.hastextcolor = true;
+
+        auto name = HTMLTagName(tag);
+        if (name == "b" || name == "strong") {
+            style.hasstylebits = true;
+            style.stylebits |= STYLE_BOLD;
+        } else if (name == "i" || name == "em") {
+            style.hasstylebits = true;
+            style.stylebits |= STYLE_ITALIC;
+        } else if (name == "u") {
+            style.hasstylebits = true;
+            style.stylebits |= STYLE_UNDERLINE;
+        } else if (name == "s" || name == "strike" || name == "del") {
+            style.hasstylebits = true;
+            style.stylebits |= STYLE_STRIKETHRU;
+        } else if (name == "font") {
+            wxString face;
+            if (HTMLAttributeValue(tag, "face", face)) {
+                auto lower = face.Lower();
+                if (lower.Find("courier") != wxNOT_FOUND || lower.Find("consolas") != wxNOT_FOUND ||
+                    lower.Find("monospace") != wxNOT_FOUND) {
+                    style.hasstylebits = true;
+                    style.stylebits |= STYLE_FIXED;
+                }
+            }
+        }
+    }
+
+    static HTMLCellStyle HTMLCellStyleFrom(const wxString &starttag, const wxString &content,
+                                           const map<wxString, wxString> &classstyles) {
+        HTMLCellStyle style;
+        ApplyHTMLStartTagStyle(starttag, classstyles, style);
+        for (auto pos = 0, len = static_cast<int>(content.Len()); pos < len;) {
+            auto tagstart = FindFrom(content, "<", pos);
+            if (tagstart == wxNOT_FOUND) break;
+            auto tagend = FindHTMLTagEnd(content, tagstart);
+            if (tagend == wxNOT_FOUND) break;
+            auto tag = content.Mid(tagstart, tagend - tagstart + 1);
+            if (!IsHTMLClosingTag(tag)) ApplyHTMLStartTagStyle(tag, classstyles, style);
+            pos = tagend + 1;
+        }
+        return style;
+    }
+
+    static wxString CodePointToString(unsigned long code) {
+        wxString decoded;
+        if (!code || code > 0x10FFFF) return decoded;
+        decoded += wxUniChar(code);
+        return decoded;
+    }
+
+    static bool DecodeHTMLEntity(const wxString &entity, wxString &decoded) {
+        auto key = entity.Lower();
+        if (key == "amp") decoded = "&";
+        else if (key == "lt") decoded = "<";
+        else if (key == "gt") decoded = ">";
+        else if (key == "quot") decoded = "\"";
+        else if (key == "apos") decoded = "'";
+        else if (key == "nbsp") decoded = " ";
+        else if (key.StartsWith("#x")) {
+            unsigned long code = 0;
+            if (!key.Mid(2).ToULong(&code, 16)) return false;
+            decoded = CodePointToString(code);
+        } else if (key.StartsWith("#")) {
+            unsigned long code = 0;
+            if (!key.Mid(1).ToULong(&code, 10)) return false;
+            decoded = CodePointToString(code);
+        } else {
+            return false;
+        }
+        return !decoded.IsEmpty();
+    }
+
+    static void AppendHTMLTextChar(wxString &out, wxChar c, bool &spacepending) {
+        if (IsHTMLSpace(c)) {
+            if (!out.IsEmpty()) spacepending = true;
+            return;
+        }
+        if (spacepending && !out.IsEmpty() && out[out.Len() - 1] != '\n') out += ' ';
+        spacepending = false;
+        out += c;
+    }
+
+    static void AppendHTMLText(wxString &out, const wxString &text, bool &spacepending) {
+        loop(i, text.Len()) {
+            if (text[i] == '\r' || text[i] == '\n') {
+                if (text[i] == '\r' && i + 1 < static_cast<int>(text.Len()) && text[i + 1] == '\n')
+                    i++;
+                if (!out.IsEmpty() && out[out.Len() - 1] != '\n') out += LINE_SEPARATOR;
+                spacepending = false;
+            } else {
+                AppendHTMLTextChar(out, text[i], spacepending);
+            }
+        }
+    }
+
+    static void AppendHTMLNewline(wxString &out, bool &spacepending) {
+        if (!out.IsEmpty() && out[out.Len() - 1] != '\n') out += LINE_SEPARATOR;
+        spacepending = false;
+    }
+
+    static wxString HTMLToText(const wxString &html) {
+        wxString out;
+        bool spacepending = false;
+        for (auto i = 0, len = static_cast<int>(html.Len()); i < len;) {
+            if (html[i] == '<') {
+                auto end = FindHTMLTagEnd(html, i);
+                if (end == wxNOT_FOUND) {
+                    AppendHTMLTextChar(out, html[i++], spacepending);
+                    continue;
+                }
+                auto tag = html.Mid(i, end - i + 1);
+                auto name = HTMLTagName(tag);
+                auto closing = IsHTMLClosingTag(tag);
+                if (!closing && name == "br")
+                    AppendHTMLNewline(out, spacepending);
+                else if (closing && (name == "p" || name == "div" || name == "li"))
+                    AppendHTMLNewline(out, spacepending);
+                i = end + 1;
+            } else if (html[i] == '&') {
+                auto end = FindFrom(html, ";", i + 1);
+                wxString decoded;
+                if (end != wxNOT_FOUND && end - i <= 32 &&
+                    DecodeHTMLEntity(html.Mid(i + 1, end - i - 1), decoded)) {
+                    AppendHTMLText(out, decoded, spacepending);
+                    i = end + 1;
+                } else {
+                    AppendHTMLTextChar(out, html[i++], spacepending);
+                }
+            } else {
+                AppendHTMLTextChar(out, html[i++], spacepending);
+            }
+        }
+        return TrimHTMLText(out);
+    }
+
+    static int FindHTMLCellStart(const wxString &lower, int start, int limit, wxString &tag) {
+        auto td = FindHTMLTag(lower, "td", start, limit);
+        auto th = FindHTMLTag(lower, "th", start, limit);
+        if (td == wxNOT_FOUND && th == wxNOT_FOUND) {
+            tag = wxEmptyString;
+            return wxNOT_FOUND;
+        }
+        if (td == wxNOT_FOUND || (th != wxNOT_FOUND && th < td)) {
+            tag = "th";
+            return th;
+        }
+        tag = "td";
+        return td;
+    }
+
+    static bool ParseHTMLTable(const wxString &html, vector<vector<HTMLTableCell>> &rows) {
+        rows.clear();
+        auto lower = html.Lower();
+        auto classstyles = ExtractHTMLClassStyles(html);
+        auto table = FindHTMLTag(lower, "table", 0);
+        if (table == wxNOT_FOUND) return false;
+        auto tableopenend = FindHTMLTagEnd(html, table);
+        if (tableopenend == wxNOT_FOUND) return false;
+        auto tableend = FindHTMLTag(lower, "table", tableopenend + 1, -1, true);
+        if (tableend == wxNOT_FOUND) tableend = static_cast<int>(html.Len());
+
+        for (auto pos = tableopenend + 1;;) {
+            auto rowstart = FindHTMLTag(lower, "tr", pos, tableend);
+            if (rowstart == wxNOT_FOUND) break;
+            auto rowopenend = FindHTMLTagEnd(html, rowstart);
+            if (rowopenend == wxNOT_FOUND) break;
+            auto rowclose = FindHTMLTag(lower, "tr", rowopenend + 1, tableend, true);
+            int rowlimit = 0;
+            int nextpos = 0;
+            if (rowclose == wxNOT_FOUND) {
+                auto nextrow = FindHTMLTag(lower, "tr", rowopenend + 1, tableend);
+                rowlimit = nextrow == wxNOT_FOUND ? tableend : nextrow;
+                nextpos = rowlimit;
+            } else {
+                rowlimit = rowclose;
+                auto rowcloseend = FindHTMLTagEnd(html, rowclose);
+                nextpos = rowcloseend == wxNOT_FOUND ? rowclose + 5 : rowcloseend + 1;
+            }
+
+            vector<HTMLTableCell> row;
+            for (auto cellpos = rowopenend + 1; cellpos < rowlimit;) {
+                wxString celltag;
+                auto cellstart = FindHTMLCellStart(lower, cellpos, rowlimit, celltag);
+                if (cellstart == wxNOT_FOUND) break;
+                auto cellopenend = FindHTMLTagEnd(html, cellstart);
+                if (cellopenend == wxNOT_FOUND || cellopenend >= rowlimit) break;
+                auto starttag = html.Mid(cellstart, cellopenend - cellstart + 1);
+                auto cellclose = FindHTMLTag(lower, celltag, cellopenend + 1, rowlimit, true);
+                int contentend = 0;
+                if (cellclose == wxNOT_FOUND) {
+                    wxString nextcelltag;
+                    auto nextcell = FindHTMLCellStart(lower, cellopenend + 1, rowlimit, nextcelltag);
+                    contentend = nextcell == wxNOT_FOUND ? rowlimit : nextcell;
+                    cellpos = contentend;
+                } else {
+                    contentend = cellclose;
+                    auto cellcloseend = FindHTMLTagEnd(html, cellclose);
+                    cellpos =
+                        cellcloseend == wxNOT_FOUND ? cellclose + static_cast<int>(celltag.Len()) + 3
+                                                     : cellcloseend + 1;
+                }
+
+                HTMLTableCell cell;
+                auto content = html.Mid(cellopenend + 1, max(0, contentend - cellopenend - 1));
+                cell.text = HTMLToText(content);
+                cell.style = HTMLCellStyleFrom(starttag, content, classstyles);
+                cell.colspan = HTMLAttributeInt(starttag, "colspan");
+                cell.rowspan = HTMLAttributeInt(starttag, "rowspan");
+                row.push_back(cell);
+            }
+            if (!row.empty()) rows.push_back(row);
+            pos = max(nextpos, rowstart + 1);
+        }
+        return !rows.empty();
+    }
+
+    bool PasteHTMLTable(const wxString &html) {
+        vector<vector<HTMLTableCell>> rows;
+        if (!ParseHTMLTable(html, rows)) return false;
+
+        vector<HTMLTablePlacement> placements;
+        vector<vector<bool>> occupied;
+        auto width = 0;
+        auto height = 0;
+        auto ensure = [&](int y, int xcount) {
+            while (static_cast<int>(occupied.size()) <= y) occupied.push_back(vector<bool>());
+            if (static_cast<int>(occupied[y].size()) < xcount) occupied[y].resize(xcount, false);
+        };
+
+        loop(y, rows.size()) {
+            auto x = 0;
+            ensure(y, 1);
+            for (auto &cell : rows[y]) {
+                while (true) {
+                    ensure(y, x + 1);
+                    if (!occupied[y][x]) break;
+                    x++;
+                }
+                auto xs = max(1, cell.colspan);
+                auto ys = max(1, cell.rowspan);
+                loop(yy, ys) {
+                    ensure(y + yy, x + xs);
+                    loop(xx, xs) occupied[y + yy][x + xx] = true;
+                }
+                placements.push_back({cell.text, cell.style, x, y, xs, ys});
+                width = max(width, x + xs);
+                height = max(height, y + ys);
+                x += xs;
+            }
+            height = max(height, y + 1);
+        }
+        if (!width || !height) return false;
+
+        auto cell = selected.ThinExpand(this);
+        if (!cell) return false;
+        if (cell->parent)
+            cell->parent->AddUndo(this);
+        else
+            cell->AddUndo(this);
+        cell->ResetLayout();
+        cell->grid = nullptr;
+        auto grid = cell->AddGrid(width, height);
+        for (auto &placement : placements) {
+            auto c = grid->C(placement.x, placement.y).get();
+            c->text.t = placement.text;
+            if (placement.style.hascellcolor) c->cellcolor = placement.style.cellcolor;
+            if (placement.style.hastextcolor) c->textcolor = placement.style.textcolor;
+            if (placement.style.hasstylebits) c->text.stylebits = placement.style.stylebits;
+            if (placement.style.hasrelsize) c->text.relsize = placement.style.relsize;
+            c->mergexs = placement.xs;
+            c->mergeys = placement.ys;
+        }
+        grid->RepairMergedCells();
+        if (!cell->HasText() && cell->parent)
+            cell->grid->MergeWithParent(cell->parent->grid, selected, this);
+        return true;
+    }
+
+    static bool HasTabularColumns(const wxArrayString &lines) {
+        loop(i, lines.size()) if (lines[i].Find('\t') != wxNOT_FOUND) return true;
+        return false;
+    }
+
+    void PasteDelimitedText(Cell *cell, const wxArrayString &lines, const wxString &sep) {
+        cell->parent->AddUndo(this);
+        cell->ResetLayout();
+        cell->grid = nullptr;
+        auto grid = cell->AddGrid(1, static_cast<int>(max<size_t>(1, lines.size())));
+        grid->CSVImport(lines, sep);
+        if (!cell->HasText()) cell->grid->MergeWithParent(cell->parent->grid, selected, this);
+    }
+
     void PasteSingleText(Cell *c, const wxString &s) { c->text.Insert(this, s, selected, false); }
 
     // Polymorphism with wxDataObjectSimple does not work on Windows; bitmap format seems to not be
@@ -2175,7 +2922,9 @@ struct Document {
                 cell->Paste(this, sys->cellclipboard.get(), selected);
             } else {
                 const wxArrayString &lines = wxStringTokenize(text, LINE_SEPARATOR);
-                if (lines.size() == 1) {
+                if (HasTabularColumns(lines)) {
+                    PasteDelimitedText(cell, lines, L'\t');
+                } else if (lines.size() == 1) {
                     cell->AddUndo(this);
                     cell->ResetLayout();
                     PasteSingleText(cell, lines[0]);
@@ -2189,6 +2938,11 @@ struct Document {
                 }
             }
         }
+    }
+
+    bool PasteOrDrop(const wxHTMLDataObject &htmldataobject) {
+        auto html = htmldataobject.GetHTML();
+        return !html.IsEmpty() && PasteHTMLTable(html);
     }
 
     void PasteOrDrop(const wxBitmapDataObject &bitmapdataobject) {
