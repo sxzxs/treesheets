@@ -1,6 +1,6 @@
 #include "stdafx.h"
 
-static const auto TS_VERSION = 26;
+static const auto TS_VERSION = 27;
 static const auto g_grid_margin = 1;
 static const auto g_cell_margin = 2;
 static const auto g_margin_extra = 2;  // TODO, could make this configurable: 0/2/4/6

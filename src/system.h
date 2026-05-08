@@ -479,6 +479,10 @@ struct System {
                 std::stoi(node->GetAttribute("colorbg", "0xFFFFFF").ToStdString(), nullptr, 0);
             c->textcolor =
                 std::stoi(node->GetAttribute("colorfg", "0x000000").ToStdString(), nullptr, 0);
+            c->bordercolor = std::stoi(
+                node->GetAttribute("colorborder", wxString() << g_bordercolor_default)
+                    .ToStdString(),
+                nullptr, 0);
             c->celltype = wxAtoi(node->GetAttribute("type", "0"));
         }
 

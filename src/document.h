@@ -1745,14 +1745,12 @@ struct Document {
                             c->textcolor = g_textcolor_default;
                         }
                         c->cellcolor = g_cellcolor_default;
+                        c->bordercolor = g_bordercolor_default;
                         if (c->grid) c->grid->bordercolor = g_bordercolor_default;
                         break;
                     case A_LASTCELLCOLOR: c->cellcolor = sys->lastcellcolor; break;
                     case A_LASTTEXTCOLOR: c->textcolor = sys->lasttextcolor; break;
-                    case A_LASTBORDCOLOR:
-                        if (c->parent && c->parent->grid)
-                            c->parent->grid->bordercolor = sys->lastbordcolor;
-                        break;
+                    case A_LASTBORDCOLOR: c->bordercolor = sys->lastbordcolor; break;
                     case A_LASTIMAGE:
                         if (sys->lastimage) c->text.image = sys->lastimage;
                         break;

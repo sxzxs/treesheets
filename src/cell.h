@@ -36,6 +36,7 @@ struct Cell {
     uint cellcolor {g_cellcolor_default};
     uint actualcellcolor {g_cellcolor_default};
     uint textcolor {g_textcolor_default};
+    uint bordercolor {g_bordercolor_default};
     bool tiny {false};
     bool verticaltextandgrid {true};
     wxUint8 drawstyle {DS_GRID};
@@ -213,6 +214,7 @@ struct Cell {
                                                grid ? make_shared<Grid>(grid->xs, grid->ys) : nullptr);
         c->text = text;
         c->text.cell = c.get();
+        c->bordercolor = bordercolor;
         c->mergexs = mergexs;
         c->mergeys = mergeys;
         c->note = note;
@@ -276,6 +278,11 @@ struct Cell {
                 str.Prepend(wxString::Format("0x%06X", textcolor));
                 str.Prepend(" colorfg=\"");
             }
+            if (bordercolor != g_bordercolor_default) {
+                str.Prepend("\"");
+                str.Prepend(wxString::Format("0x%06X", bordercolor));
+                str.Prepend(" colorborder=\"");
+            }
             if (celltype != CT_DATA) {
                 str.Prepend("\"");
                 str.Prepend(wxString() << celltype);
@@ -309,6 +316,8 @@ struct Cell {
                        : 0x000000;
             if (!inheritstyle || exporttextcolor != parenttextcolor)
                 style += wxString::Format("color: #%06X;", SwapColor(exporttextcolor));
+            if (!inheritstyle || bordercolor != (parent ? parent->bordercolor : g_bordercolor_default))
+                style += wxString::Format("border-color: #%06X;", SwapColor(bordercolor));
             str.Prepend(style.IsEmpty() ? wxString("<td>")
                                         : wxString("<td style=\"") + style + wxString("\">"));
             str.Append(' ', indent);
@@ -363,6 +372,7 @@ struct Cell {
         dos.Write8(celltype);
         dos.Write32(cellcolor);
         dos.Write32(textcolor);
+        dos.Write32(bordercolor);
         dos.Write8(drawstyle);
         dos.WriteString(note);
         dos.Write32(mergexs);
@@ -408,6 +418,7 @@ struct Cell {
             c->cellcolor = dis.Read32() & 0xFFFFFF;
             c->textcolor = dis.Read32() & 0xFFFFFF;
         }
+        if (sys->versionlastloaded >= 27) c->bordercolor = dis.Read32() & 0xFFFFFF;
         if (sys->versionlastloaded >= 15) c->drawstyle = dis.Read8();
         if (sys->versionlastloaded >= 25) c->note = dis.ReadString();
         if (sys->versionlastloaded >= 26) {
@@ -440,6 +451,7 @@ struct Cell {
         parent->AddUndo(document);
         ResetLayout();
         if (!HasText() || !selection.TextEdit()) { note = original->note; }
+        if (!selection.TextEdit()) bordercolor = original->bordercolor;
         if (original->HasText()) {
             if (!HasText() || !selection.TextEdit()) {
                 cellcolor = original->cellcolor;
@@ -534,7 +546,7 @@ struct Cell {
                 }
                 break;
             case A_BORDCOLOR:
-                if (parent && parent->grid) parent->grid->bordercolor = color;
+                bordercolor = color;
                 break;
         }
         text.WasEdited();
