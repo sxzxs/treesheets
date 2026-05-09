@@ -224,13 +224,46 @@ struct TSFrame : wxFrame {
             MyAppend(sizemenu, A_RESETWIDTH, _("Reset column widths") + "\tCTRL+R",
                      _("Reset the column widths in the selection to the default column width"));
 
+            auto gridbordwidthmenu = new wxMenu();
+            MyAppend(gridbordwidthmenu, A_BORD0, _("Border &0") + "\tCTRL+SHIFT+9");
+            MyAppend(gridbordwidthmenu, A_BORD1, _("Border &1") + "\tCTRL+SHIFT+1");
+            MyAppend(gridbordwidthmenu, A_BORD2, _("Border &2") + "\tCTRL+SHIFT+2");
+            MyAppend(gridbordwidthmenu, A_BORD3, _("Border &3") + "\tCTRL+SHIFT+3");
+            MyAppend(gridbordwidthmenu, A_BORD4, _("Border &4") + "\tCTRL+SHIFT+4");
+            MyAppend(gridbordwidthmenu, A_BORD5, _("Border &5") + "\tCTRL+SHIFT+5");
+
+            auto selouterbordwidthmenu = new wxMenu();
+            MyAppend(selouterbordwidthmenu, A_SEL_BORD_OUTER0, _("Border &0"));
+            MyAppend(selouterbordwidthmenu, A_SEL_BORD_OUTER1, _("Border &1"));
+            MyAppend(selouterbordwidthmenu, A_SEL_BORD_OUTER2, _("Border &2"));
+            MyAppend(selouterbordwidthmenu, A_SEL_BORD_OUTER3, _("Border &3"));
+            MyAppend(selouterbordwidthmenu, A_SEL_BORD_OUTER4, _("Border &4"));
+            MyAppend(selouterbordwidthmenu, A_SEL_BORD_OUTER5, _("Border &5"));
+
+            auto selinnerbordwidthmenu = new wxMenu();
+            MyAppend(selinnerbordwidthmenu, A_SEL_BORD_INNER0, _("Border &0"));
+            MyAppend(selinnerbordwidthmenu, A_SEL_BORD_INNER1, _("Border &1"));
+            MyAppend(selinnerbordwidthmenu, A_SEL_BORD_INNER2, _("Border &2"));
+            MyAppend(selinnerbordwidthmenu, A_SEL_BORD_INNER3, _("Border &3"));
+            MyAppend(selinnerbordwidthmenu, A_SEL_BORD_INNER4, _("Border &4"));
+            MyAppend(selinnerbordwidthmenu, A_SEL_BORD_INNER5, _("Border &5"));
+
             auto bordmenu = new wxMenu();
-            MyAppend(bordmenu, A_BORD0, _("Border &0") + "\tCTRL+SHIFT+9");
-            MyAppend(bordmenu, A_BORD1, _("Border &1") + "\tCTRL+SHIFT+1");
-            MyAppend(bordmenu, A_BORD2, _("Border &2") + "\tCTRL+SHIFT+2");
-            MyAppend(bordmenu, A_BORD3, _("Border &3") + "\tCTRL+SHIFT+3");
-            MyAppend(bordmenu, A_BORD4, _("Border &4") + "\tCTRL+SHIFT+4");
-            MyAppend(bordmenu, A_BORD5, _("Border &5") + "\tCTRL+SHIFT+5");
+            MyAppend(bordmenu, A_SEL_BORD_OUTER_COLOR_PICK,
+                     _("Selection outline border color..."));
+            MyAppend(bordmenu, A_SEL_BORD_INNER_COLOR_PICK,
+                     _("Selection inner border color..."));
+            bordmenu->AppendSeparator();
+            MyAppend(bordmenu, A_SEL_BORD_OUTER_COLOR,
+                     _("Apply last border color to selection outline"));
+            MyAppend(bordmenu, A_SEL_BORD_INNER_COLOR,
+                     _("Apply last border color to selection inner borders"));
+            bordmenu->AppendSeparator();
+            bordmenu->AppendSubMenu(gridbordwidthmenu, _("Set grid outer border width"));
+            bordmenu->AppendSubMenu(selouterbordwidthmenu,
+                                    _("Set selection outline border width"));
+            bordmenu->AppendSubMenu(selinnerbordwidthmenu,
+                                    _("Set selection inner border width"));
 
             auto selmenu = new wxMenu();
             MyAppend(selmenu, A_NEXT,
@@ -499,7 +532,7 @@ struct TSFrame : wxFrame {
             editmenu->AppendSubMenu(temenu, _("Text &Editing"));
             editmenu->AppendSubMenu(sizemenu, _("Text Sizing"));
             editmenu->AppendSubMenu(stmenu, _("Text Style"));
-            editmenu->AppendSubMenu(bordmenu, _("Set Grid Border Width"));
+            editmenu->AppendSubMenu(bordmenu, _("Borders"));
             editmenu->AppendSubMenu(tagmenu, _("Tag"));
 
             if (!twoeditmenus) editmenupopup = editmenu;

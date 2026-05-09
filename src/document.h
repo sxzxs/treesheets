@@ -1707,6 +1707,55 @@ struct Document {
                 canvas->Refresh();
                 return wxEmptyString;
 
+            case A_SEL_BORD_OUTER_COLOR:
+            case A_SEL_BORD_INNER_COLOR:
+            case A_SEL_BORD_OUTER_COLOR_PICK:
+            case A_SEL_BORD_INNER_COLOR_PICK: {
+                if (selected.Thin()) return NoThin();
+                uint color = sys->lastbordcolor;
+                if (action == A_SEL_BORD_OUTER_COLOR_PICK ||
+                    action == A_SEL_BORD_INNER_COLOR_PICK) {
+                    auto picked = wxGetColourFromUser(sys->frame, wxColour(color));
+                    if (!picked.IsOk()) return _("Color change cancelled.");
+                    color = (picked.Blue() << 16) + (picked.Green() << 8) + picked.Red();
+                    sys->lastbordcolor = color;
+                }
+                selected.grid->cell->AddUndo(this);
+                if (action == A_SEL_BORD_OUTER_COLOR ||
+                    action == A_SEL_BORD_OUTER_COLOR_PICK)
+                    selected.grid->SetSelectionOuterBorder(selected, color, 0, false);
+                else
+                    selected.grid->SetSelectionInnerBorder(selected, color, 0, false);
+                canvas->Refresh();
+                return wxEmptyString;
+            }
+
+            case A_SEL_BORD_OUTER0:
+            case A_SEL_BORD_OUTER1:
+            case A_SEL_BORD_OUTER2:
+            case A_SEL_BORD_OUTER3:
+            case A_SEL_BORD_OUTER4:
+            case A_SEL_BORD_OUTER5:
+                if (selected.Thin()) return NoThin();
+                selected.grid->cell->AddUndo(this);
+                selected.grid->SetSelectionOuterBorder(selected, sys->lastbordcolor,
+                                                       action - A_SEL_BORD_OUTER0, true);
+                canvas->Refresh();
+                return wxEmptyString;
+
+            case A_SEL_BORD_INNER0:
+            case A_SEL_BORD_INNER1:
+            case A_SEL_BORD_INNER2:
+            case A_SEL_BORD_INNER3:
+            case A_SEL_BORD_INNER4:
+            case A_SEL_BORD_INNER5:
+                if (selected.Thin()) return NoThin();
+                selected.grid->cell->AddUndo(this);
+                selected.grid->SetSelectionInnerBorder(selected, sys->lastbordcolor,
+                                                       action - A_SEL_BORD_INNER0, true);
+                canvas->Refresh();
+                return wxEmptyString;
+
             case A_TEXTGRID: return layrender(-1, true, true);
 
             case A_V_GS: return layrender(DS_GRID, true);
@@ -1732,6 +1781,7 @@ struct Document {
                 selected.grid->cell->AddUndo(this);
                 if (action == A_RESETCOLOR) {
                     selected.grid->bordercolor = g_bordercolor_default;
+                    if (!selected.Thin()) selected.grid->ClearSelectionBorders(selected);
                 } else if (action == A_LASTBORDCOLOR) {
                     selected.grid->bordercolor = sys->lastbordcolor;
                 }
@@ -1751,7 +1801,10 @@ struct Document {
                         }
                         c->cellcolor = g_cellcolor_default;
                         c->bordercolor = g_bordercolor_default;
-                        if (c->grid) c->grid->bordercolor = g_bordercolor_default;
+                        if (c->grid) {
+                            c->grid->bordercolor = g_bordercolor_default;
+                            c->grid->ClearAllCustomBorders();
+                        }
                         break;
                     case A_LASTCELLCOLOR: c->cellcolor = sys->lastcellcolor; break;
                     case A_LASTTEXTCOLOR: c->textcolor = sys->lasttextcolor; break;

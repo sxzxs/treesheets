@@ -1,6 +1,6 @@
 #include "stdafx.h"
 
-static const auto TS_VERSION = 27;
+static const auto TS_VERSION = 28;
 static const auto g_grid_margin = 1;
 static const auto g_cell_margin = 2;
 static const auto g_margin_extra = 2;  // TODO, could make this configurable: 0/2/4/6
@@ -175,6 +175,22 @@ enum {
     A_BORD3,
     A_BORD4,
     A_BORD5,
+    A_SEL_BORD_OUTER_COLOR,
+    A_SEL_BORD_INNER_COLOR,
+    A_SEL_BORD_OUTER_COLOR_PICK,
+    A_SEL_BORD_INNER_COLOR_PICK,
+    A_SEL_BORD_OUTER0,
+    A_SEL_BORD_OUTER1,
+    A_SEL_BORD_OUTER2,
+    A_SEL_BORD_OUTER3,
+    A_SEL_BORD_OUTER4,
+    A_SEL_BORD_OUTER5,
+    A_SEL_BORD_INNER0,
+    A_SEL_BORD_INNER1,
+    A_SEL_BORD_INNER2,
+    A_SEL_BORD_INNER3,
+    A_SEL_BORD_INNER4,
+    A_SEL_BORD_INNER5,
     A_HSWAP,
     A_TEXTGRID,
     A_TAGADD,

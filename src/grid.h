@@ -1,10 +1,19 @@
 struct Grid {
+    struct BorderLineStyle {
+        uint color {g_bordercolor_default};
+        wxUint8 width {0};
+
+        bool Visible() const { return width > 0; }
+    };
+
     // owning cell.
     Cell *cell;
     // subcells
     vector<unique_ptr<Cell>> cells;
     // widths for each column
     vector<int> colwidths;
+    vector<BorderLineStyle> vborderstyles;
+    vector<BorderLineStyle> hborderstyles;
     // xsize, ysize
     int xs;
     int ys;
@@ -72,6 +81,7 @@ struct Grid {
     Grid(int _xs, int _ys, Cell *_c = nullptr)
         : xs(_xs), ys(_ys), cell(_c), cells(_xs * _ys) {
         InitColWidths();
+        InitBorderStyles();
         SetOrient();
     }
 
@@ -88,11 +98,47 @@ struct Grid {
         colwidths.resize(xs, cell ? cell->ColWidth() : sys->defaultmaxcolwidth);
     }
 
+    void InitBorderStyles() {
+        vborderstyles.resize((xs + 1) * ys);
+        hborderstyles.resize(xs * (ys + 1));
+    }
+
+    int VBorderIndex(int x, int y) const {
+        ASSERT(x >= 0 && x <= xs && y >= 0 && y < ys);
+        return x + y * (xs + 1);
+    }
+
+    int HBorderIndex(int x, int y) const {
+        ASSERT(x >= 0 && x < xs && y >= 0 && y <= ys);
+        return x + y * xs;
+    }
+
+    BorderLineStyle &VBorder(int x, int y) { return vborderstyles[VBorderIndex(x, y)]; }
+    BorderLineStyle &HBorder(int x, int y) { return hborderstyles[HBorderIndex(x, y)]; }
+    const BorderLineStyle &VBorder(int x, int y) const {
+        return vborderstyles[VBorderIndex(x, y)];
+    }
+    const BorderLineStyle &HBorder(int x, int y) const {
+        return hborderstyles[HBorderIndex(x, y)];
+    }
+
+    int DefaultSelectionBorderWidth() const { return max(1, g_usergridouterspacing_default - 1); }
+
+    bool HasCustomBorders() const {
+        for (const auto &style : vborderstyles)
+            if (style.Visible()) return true;
+        for (const auto &style : hborderstyles)
+            if (style.Visible()) return true;
+        return false;
+    }
+
     /* Clones g into this grid. This mutates the grid this function is called on. */
     void Clone(shared_ptr<Grid> g) {
         g->bordercolor = bordercolor;
         g->user_grid_outer_spacing = user_grid_outer_spacing;
         g->folded = folded;
+        g->vborderstyles = vborderstyles;
+        g->hborderstyles = hborderstyles;
         foreachcell(c) g->C(x, y) = c->Clone(g->cell);
         loop(x, xs) g->colwidths[x] = colwidths[x];
     }
@@ -101,6 +147,12 @@ struct Grid {
         auto cl = make_unique<Cell>(nullptr, sel.grid->cell, CT_DATA, make_shared<Grid>(sel.xs, sel.ys));
         foreachcellinsel(c, sel) cl->grid->C(x - sel.x, y - sel.y) = c->Clone(cl.get());
         loop(i, sel.xs) cl->grid->colwidths[i] = sel.grid->colwidths[sel.x + i];
+        for (int y = 0; y < sel.ys; y++)
+            for (int x = 0; x <= sel.xs; x++)
+                cl->grid->VBorder(x, y) = sel.grid->VBorder(sel.x + x, sel.y + y);
+        for (int y = 0; y <= sel.ys; y++)
+            for (int x = 0; x < sel.xs; x++)
+                cl->grid->HBorder(x, y) = sel.grid->HBorder(sel.x + x, sel.y + y);
         cl->grid->RepairMergedCells();
         return cl;
     }
@@ -216,7 +268,8 @@ struct Grid {
     size_t EstimatedMemoryUse() {
         size_t sum = 0;
         foreachcell(c) sum += c->EstimatedMemoryUse();
-        return sizeof(Grid) + xs * ys * sizeof(Cell *) + sum;
+        return sizeof(Grid) + xs * ys * sizeof(Cell *) +
+               (vborderstyles.size() + hborderstyles.size()) * sizeof(BorderLineStyle) + sum;
     }
 
     void SetOrient() {
@@ -283,6 +336,34 @@ struct Grid {
         delete[] xa;
         delete[] ya;
         return tinyborder;
+    }
+
+    void DrawCustomBorders(Document *doc, wxDC &dc, int bx, int by, int maxx, int maxy) {
+        if (!(tinyborder || cell->drawstyle == DS_GRID)) return;
+        if (!HasCustomBorders()) return;
+
+        auto linex = [&](int col) {
+            return bx + (col == xs ? maxx : C(col, 0)->ox - g_line_width);
+        };
+        auto liney = [&](int row) {
+            return by + (row == ys ? maxy : C(0, row)->oy - g_line_width);
+        };
+        auto drawsegment = [&](const BorderLineStyle &style, int x1, int y1, int x2, int y2) {
+            if (!style.Visible()) return;
+            int w = style.width;
+            if (max(x1, x2) + w < doc->scrollx || min(x1, x2) - w > doc->maxx ||
+                max(y1, y2) + w < doc->scrolly || min(y1, y2) - w > doc->maxy)
+                return;
+            dc.SetPen(wxPen(LightColor(style.color), style.width));
+            dc.DrawLine(x1, y1, x2, y2);
+        };
+
+        for (int y = 0; y < ys; y++)
+            for (int x = 0; x <= xs; x++)
+                drawsegment(VBorder(x, y), linex(x), liney(y), linex(x), liney(y + 1));
+        for (int y = 0; y <= ys; y++)
+            for (int x = 0; x < xs; x++)
+                drawsegment(HBorder(x, y), linex(x), liney(y), linex(x + 1), liney(y));
     }
 
     void Render(Document *doc, int bx, int by, wxDC &dc, int depth, int sx, int sy, int xoff,
@@ -388,6 +469,7 @@ struct Grid {
                     sys->roundness + i);
             }
         }
+        DrawCustomBorders(doc, dc, bx, by, maxx, maxy);
     }
 
     void FindXY(Document *doc, int px, int py, wxReadOnlyDC &dc) {
@@ -556,8 +638,78 @@ struct Grid {
         }
     }
 
+    static int MapDeletedLine(int v, int deleted) {
+        return deleted < 0 ? v : (v <= deleted ? v : v + 1);
+    }
+
+    static int MapDeletedSegment(int v, int deleted) {
+        return deleted < 0 ? v : (v < deleted ? v : v + 1);
+    }
+
+    static int MapInsertedLine(int v, int inserted, int count) {
+        if (count <= 0) return v;
+        if (v <= inserted) return v;
+        if (v >= inserted + count) return v - count;
+        return -1;
+    }
+
+    static int MapInsertedSegment(int v, int inserted, int count) {
+        if (count <= 0) return v;
+        if (v < inserted) return v;
+        if (v >= inserted + count) return v - count;
+        return -1;
+    }
+
+    void RestoreBorderStylesAfterDelete(int oldxs, int oldys, int dx, int dy,
+                                        const vector<BorderLineStyle> &oldv,
+                                        const vector<BorderLineStyle> &oldh) {
+        vborderstyles.assign((xs + 1) * ys, BorderLineStyle());
+        hborderstyles.assign(xs * (ys + 1), BorderLineStyle());
+        for (int y = 0; y < ys; y++) {
+            int oy = MapDeletedSegment(y, dy);
+            for (int x = 0; x <= xs; x++) {
+                int ox = MapDeletedLine(x, dx);
+                VBorder(x, y) = oldv[ox + oy * (oldxs + 1)];
+            }
+        }
+        for (int y = 0; y <= ys; y++) {
+            int oy = MapDeletedLine(y, dy);
+            for (int x = 0; x < xs; x++) {
+                int ox = MapDeletedSegment(x, dx);
+                HBorder(x, y) = oldh[ox + oy * oldxs];
+            }
+        }
+    }
+
+    void RestoreBorderStylesAfterInsert(int oldxs, int oldys, int dx, int dy, int nxs, int nys,
+                                        const vector<BorderLineStyle> &oldv,
+                                        const vector<BorderLineStyle> &oldh) {
+        vborderstyles.assign((xs + 1) * ys, BorderLineStyle());
+        hborderstyles.assign(xs * (ys + 1), BorderLineStyle());
+        for (int y = 0; y < ys; y++) {
+            int oy = MapInsertedSegment(y, dy, nys);
+            if (oy < 0) continue;
+            for (int x = 0; x <= xs; x++) {
+                int ox = MapInsertedLine(x, dx, nxs);
+                if (ox >= 0) VBorder(x, y) = oldv[ox + oy * (oldxs + 1)];
+            }
+        }
+        for (int y = 0; y <= ys; y++) {
+            int oy = MapInsertedLine(y, dy, nys);
+            if (oy < 0) continue;
+            for (int x = 0; x < xs; x++) {
+                int ox = MapInsertedSegment(x, dx, nxs);
+                if (ox >= 0) HBorder(x, y) = oldh[ox + oy * oldxs];
+            }
+        }
+    }
+
     void DeleteCells(int dx, int dy, int nxs, int nys) {
         UnmergeAll();
+        int oldxs = xs;
+        int oldys = ys;
+        auto oldvborderstyles = vborderstyles;
+        auto oldhborderstyles = hborderstyles;
         vector<unique_ptr<Cell>> ncells;
         ncells.reserve((xs + nxs) * (ys + nys));
         foreachcell(c) if (!(x == dx || y == dy)) ncells.push_back(std::move(c));
@@ -565,6 +717,7 @@ struct Grid {
         xs += nxs;
         ys += nys;
         if (dx >= 0) colwidths.erase(colwidths.begin() + dx);
+        RestoreBorderStylesAfterDelete(oldxs, oldys, dx, dy, oldvborderstyles, oldhborderstyles);
         SetOrient();
     }
 
@@ -650,6 +803,8 @@ struct Grid {
     void InsertCells(int dx, int dy, int nxs, int nys, unique_ptr<Cell> nc = nullptr) {
         UnmergeAll();
         vector<unique_ptr<Cell>> ocells = std::move(cells);
+        auto oldvborderstyles = vborderstyles;
+        auto oldhborderstyles = hborderstyles;
         int oxs = xs;
         int oys = ys;
         xs += nxs;
@@ -673,6 +828,31 @@ struct Grid {
             }
         }
         if (dx >= 0 && nxs > 0) colwidths.insert(colwidths.begin() + dx, nxs, cell->ColWidth());
+        RestoreBorderStylesAfterInsert(oxs, oys, dx, dy, nxs, nys, oldvborderstyles,
+                                       oldhborderstyles);
+    }
+
+    void SaveBorderStyles(wxDataOutputStream &dos) const {
+        for (const auto &style : vborderstyles) {
+            dos.Write8(style.width);
+            dos.Write32(style.color);
+        }
+        for (const auto &style : hborderstyles) {
+            dos.Write8(style.width);
+            dos.Write32(style.color);
+        }
+    }
+
+    void LoadBorderStyles(wxDataInputStream &dis) {
+        InitBorderStyles();
+        for (auto &style : vborderstyles) {
+            style.width = dis.Read8();
+            style.color = dis.Read32() & 0xFFFFFF;
+        }
+        for (auto &style : hborderstyles) {
+            style.width = dis.Read8();
+            style.color = dis.Read32() & 0xFFFFFF;
+        }
     }
 
     void Save(wxDataOutputStream &dos, Cell *ocs) const {
@@ -683,6 +863,7 @@ struct Grid {
         dos.Write8(cell->verticaltextandgrid);
         dos.Write8(folded);
         loop(x, xs) dos.Write32(colwidths[x]);
+        SaveBorderStyles(dos);
         foreachcellconst(c) c->Save(dos, ocs);
     }
 
@@ -702,9 +883,11 @@ struct Grid {
                         }
                     }
                     loop(x, xs) colwidths[x] = dis.Read32();
+                    if (sys->versionlastloaded >= 28) LoadBorderStyles(dis);
                 }
             }
         }
+        if (sys->versionlastloaded < 28) InitBorderStyles();
         foreachcell(c) {
             Cell *rc = Cell::LoadWhich(dis, cell, numcells, textbytes, ics);
             if (!rc) return false;
@@ -771,6 +954,47 @@ struct Grid {
     }
     void SetBorderWidth(int visible_width) {
         user_grid_outer_spacing = max(0, visible_width) + 1;
+    }
+
+    void SetBorderStyle(BorderLineStyle &style, uint color, int visible_width, bool set_width) {
+        style.color = color;
+        if (set_width) {
+            style.width = max(0, visible_width);
+        } else if (!style.Visible()) {
+            style.width = DefaultSelectionBorderWidth();
+        }
+    }
+
+    void SetSelectionOuterBorder(const Selection &sel, uint color, int visible_width,
+                                 bool set_width) {
+        for (int x = sel.x; x < sel.x + sel.xs; x++) {
+            SetBorderStyle(HBorder(x, sel.y), color, visible_width, set_width);
+            SetBorderStyle(HBorder(x, sel.y + sel.ys), color, visible_width, set_width);
+        }
+        for (int y = sel.y; y < sel.y + sel.ys; y++) {
+            SetBorderStyle(VBorder(sel.x, y), color, visible_width, set_width);
+            SetBorderStyle(VBorder(sel.x + sel.xs, y), color, visible_width, set_width);
+        }
+    }
+
+    void SetSelectionInnerBorder(const Selection &sel, uint color, int visible_width,
+                                 bool set_width) {
+        for (int x = sel.x + 1; x < sel.x + sel.xs; x++)
+            for (int y = sel.y; y < sel.y + sel.ys; y++)
+                SetBorderStyle(VBorder(x, y), color, visible_width, set_width);
+        for (int y = sel.y + 1; y < sel.y + sel.ys; y++)
+            for (int x = sel.x; x < sel.x + sel.xs; x++)
+                SetBorderStyle(HBorder(x, y), color, visible_width, set_width);
+    }
+
+    void ClearSelectionBorders(const Selection &sel) {
+        SetSelectionOuterBorder(sel, g_bordercolor_default, 0, true);
+        SetSelectionInnerBorder(sel, g_bordercolor_default, 0, true);
+    }
+
+    void ClearAllCustomBorders() {
+        ranges::fill(vborderstyles, BorderLineStyle());
+        ranges::fill(hborderstyles, BorderLineStyle());
     }
 
     int MinRelsize(int rs) {
@@ -897,6 +1121,7 @@ struct Grid {
         }
 
         ys = cy;  // throws memory away, but doesn't matter
+        InitBorderStyles();
     }
 
     unique_ptr<Cell> EvalGridCell(auto &ev, unique_ptr<Cell> &c, unique_ptr<Cell> acc, int &x,
@@ -1015,12 +1240,23 @@ struct Grid {
     }
 
     void Transpose() {
+        int oldxs = xs;
+        int oldys = ys;
+        auto oldvborderstyles = vborderstyles;
+        auto oldhborderstyles = hborderstyles;
         vector<unique_ptr<Cell>> tr(xs * ys);
         foreachcell(c) tr[y + x * ys] = std::move(c);
         cells = std::move(tr);
         swap_(xs, ys);
         SetOrient();
         InitColWidths();
+        InitBorderStyles();
+        for (int y = 0; y < oldys; y++)
+            for (int x = 0; x <= oldxs; x++)
+                HBorder(y, x) = oldvborderstyles[x + y * (oldxs + 1)];
+        for (int y = 0; y <= oldys; y++)
+            for (int x = 0; x < oldxs; x++)
+                VBorder(y, x) = oldhborderstyles[x + y * oldxs];
     }
 
     void Sort(Selection &sel, bool descending) {
