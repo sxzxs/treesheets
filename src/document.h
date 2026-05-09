@@ -1702,7 +1702,7 @@ struct Document {
             case A_BORD4:
             case A_BORD5:
                 selected.grid->cell->AddUndo(this);
-                selected.grid->SetBorder(action - A_BORD0 + 1);
+                selected.grid->SetBorderWidth(action - A_BORD0);
                 selected.grid->cell->ResetChildren();
                 canvas->Refresh();
                 return wxEmptyString;
@@ -1730,6 +1730,11 @@ struct Document {
             case A_LASTBORDCOLOR:
             case A_LASTIMAGE:
                 selected.grid->cell->AddUndo(this);
+                if (action == A_RESETCOLOR) {
+                    selected.grid->bordercolor = g_bordercolor_default;
+                } else if (action == A_LASTBORDCOLOR) {
+                    selected.grid->bordercolor = sys->lastbordcolor;
+                }
                 loopallcellssel(c, true) switch (action) {
                     case A_RESETSIZE: c->text.relsize = 0; break;
                     case A_RESETWIDTH:
@@ -1750,7 +1755,7 @@ struct Document {
                         break;
                     case A_LASTCELLCOLOR: c->cellcolor = sys->lastcellcolor; break;
                     case A_LASTTEXTCOLOR: c->textcolor = sys->lasttextcolor; break;
-                    case A_LASTBORDCOLOR: c->bordercolor = sys->lastbordcolor; break;
+                    case A_LASTBORDCOLOR: break;
                     case A_LASTIMAGE:
                         if (sys->lastimage) c->text.image = sys->lastimage;
                         break;

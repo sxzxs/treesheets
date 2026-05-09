@@ -285,38 +285,6 @@ struct Grid {
         return tinyborder;
     }
 
-    void DrawColoredCellBorders(Document *doc, wxDC &dc, int bx, int by, int maxx, int maxy) {
-        if (!(tinyborder || cell->drawstyle == DS_GRID)) return;
-
-        auto linex = [&](int col) {
-            return bx + (col == xs ? maxx : C(col, 0)->ox - g_line_width);
-        };
-        auto liney = [&](int row) {
-            return by + (row == ys ? maxy : C(0, row)->oy - g_line_width);
-        };
-
-        foreachcell(c) {
-            if (IsCovered(x, y) || c->tiny || c->bordercolor == g_bordercolor_default) continue;
-            int mxs = MergeXS(x, y);
-            int mys = MergeYS(x, y);
-            int left = linex(x);
-            int right = linex(x + mxs);
-            int top = liney(y);
-            int bottom = liney(y + mys);
-            if (right < doc->scrollx || left > doc->maxx || bottom < doc->scrolly ||
-                top > doc->maxy)
-                continue;
-
-            dc.SetPen(wxPen(LightColor(c->bordercolor)));
-            loop(line, g_line_width) {
-                dc.DrawLine(left + line, top, left + line, bottom + g_line_width);
-                dc.DrawLine(right + line, top, right + line, bottom + g_line_width);
-                dc.DrawLine(left, top + line, right + g_line_width, top + line);
-                dc.DrawLine(left, bottom + line, right + g_line_width, bottom + line);
-            }
-        }
-    }
-
     void Render(Document *doc, int bx, int by, wxDC &dc, int depth, int sx, int sy, int xoff,
                 int yoff) {
         xoff = C(0, 0)->ox - view_margin - view_grid_outer_spacing - 1;
@@ -420,7 +388,6 @@ struct Grid {
                     sys->roundness + i);
             }
         }
-        DrawColoredCellBorders(doc, dc, bx, by, maxx, maxy);
     }
 
     void FindXY(Document *doc, int px, int py, wxReadOnlyDC &dc) {
@@ -802,8 +769,8 @@ struct Grid {
     void RelSize(int dir, const Selection &sel, int zoomdepth) {
         foreachcellinsel(c, sel) c->RelSize(dir, zoomdepth);
     }
-    void SetBorder(int width) {
-        user_grid_outer_spacing = width;
+    void SetBorderWidth(int visible_width) {
+        user_grid_outer_spacing = max(0, visible_width) + 1;
     }
 
     int MinRelsize(int rs) {
@@ -868,6 +835,11 @@ struct Grid {
     void ColorChange(Document *doc, int which, uint color, const Selection &sel) {
         cell->AddUndo(doc);
         cell->ResetChildren();
+        if (which == A_BORDCOLOR) {
+            bordercolor = color;
+            doc->canvas->Refresh();
+            return;
+        }
         foreachcellinsel(c, sel) c->ColorChange(doc, which, color);
         doc->canvas->Refresh();
     }
