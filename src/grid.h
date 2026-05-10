@@ -1016,6 +1016,39 @@ struct Grid {
         }
     }
 
+    BorderLineStyle *BorderLineForSelection(const Selection &sel) {
+        if (!sel.Thin()) return nullptr;
+        if (sel.xs == 1 && sel.ys == 0 && sel.x >= 0 && sel.x < xs && sel.y >= 0 && sel.y <= ys)
+            return &HBorder(sel.x, sel.y);
+        if (sel.xs == 0 && sel.ys == 1 && sel.x >= 0 && sel.x <= xs && sel.y >= 0 && sel.y < ys)
+            return &VBorder(sel.x, sel.y);
+        return nullptr;
+    }
+
+    const BorderLineStyle *BorderLineForSelection(const Selection &sel) const {
+        if (!sel.Thin()) return nullptr;
+        if (sel.xs == 1 && sel.ys == 0 && sel.x >= 0 && sel.x < xs && sel.y >= 0 && sel.y <= ys)
+            return &HBorder(sel.x, sel.y);
+        if (sel.xs == 0 && sel.ys == 1 && sel.x >= 0 && sel.x <= xs && sel.y >= 0 && sel.y < ys)
+            return &VBorder(sel.x, sel.y);
+        return nullptr;
+    }
+
+    bool BorderLineNeedsPaint(const Selection &sel, uint color) const {
+        auto style = BorderLineForSelection(sel);
+        if (!style) return false;
+        auto width = style->Visible() ? style->width : DefaultSelectionBorderWidth();
+        return style->color != color || style->width != width;
+    }
+
+    bool PaintBorderLine(const Selection &sel, uint color) {
+        auto style = BorderLineForSelection(sel);
+        if (!style) return false;
+        if (!BorderLineNeedsPaint(sel, color)) return false;
+        SetBorderStyle(*style, color, 0, false);
+        return true;
+    }
+
     void SetSelectionOuterBorder(const Selection &sel, uint color, int visible_width,
                                  bool set_width) {
         for (int x = sel.x; x < sel.x + sel.xs; x++) {

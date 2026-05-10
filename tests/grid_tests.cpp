@@ -143,6 +143,31 @@ void TestSetAndClearSelectionBorders() {
     CHECK(!grid->HasCustomBorders());
 }
 
+void TestPaintBorderLineChangesOnlyTargetLine() {
+    auto root = MakeRoot(2, 2);
+    auto grid = root->grid.get();
+
+    treesheets::Selection horizontal(root->grid, 0, 1, 1, 0);
+    CHECK(grid->PaintBorderLine(horizontal, 0x123456));
+    CHECK_EQ(grid->HBorder(0, 1).color, 0x123456u);
+    CHECK_EQ(grid->HBorder(0, 1).width, grid->DefaultSelectionBorderWidth());
+    CHECK_EQ(grid->HBorder(1, 1).width, 0);
+    CHECK(!grid->PaintBorderLine(horizontal, 0x123456));
+
+    grid->HBorder(0, 1).width = 5;
+    CHECK(grid->PaintBorderLine(horizontal, 0x654321));
+    CHECK_EQ(grid->HBorder(0, 1).color, 0x654321u);
+    CHECK_EQ(grid->HBorder(0, 1).width, 5);
+
+    treesheets::Selection vertical(root->grid, 1, 0, 0, 1);
+    CHECK(grid->PaintBorderLine(vertical, 0xABCDEF));
+    CHECK_EQ(grid->VBorder(1, 0).color, 0xABCDEFu);
+    CHECK_EQ(grid->VBorder(1, 0).width, grid->DefaultSelectionBorderWidth());
+
+    treesheets::Selection cell(root->grid, 0, 0, 1, 1);
+    CHECK(!grid->PaintBorderLine(cell, 0x111111));
+}
+
 void TestTransposeSwapsCellsAndBorders() {
     auto root = MakeRoot(2, 3);
     auto grid = root->grid.get();
@@ -243,6 +268,7 @@ int main() {
     TestInsertColumnCopiesNeighborStyleAndShiftsContent();
     TestDeleteColumnRemovesContentAndShrinksBorderStorage();
     TestSetAndClearSelectionBorders();
+    TestPaintBorderLineChangesOnlyTargetLine();
     TestTransposeSwapsCellsAndBorders();
     TestSortRowsUsesSelectionColumnFirst();
     TestLargeCloneAndSortStressPreservesDataAndMemoryEstimate();

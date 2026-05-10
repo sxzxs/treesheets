@@ -27,6 +27,7 @@ struct TSFrame : wxFrame {
     bool watcherwaitingforuser {false};
     bool explorerrefreshpending {false};
     bool explorerautohide {false};
+    bool borderpaintmode {false};
     wxColour toolbarbackgroundcolor {0xD8C7BC};
     wxTextCtrl *filter {nullptr};
     wxTextCtrl *replaces {nullptr};
@@ -275,6 +276,9 @@ struct TSFrame : wxFrame {
                      _("Apply last border color to selection outline"));
             MyAppend(bordmenu, A_SEL_BORD_INNER_COLOR,
                      _("Apply last border color to selection inner borders"));
+            bordmenu->AppendSeparator();
+            bordmenu->AppendCheckItem(A_BORDERPAINT, _("Border color painter"),
+                                      _("Paint individual grid lines with the last border color"));
             bordmenu->AppendSeparator();
             bordmenu->AppendSubMenu(gridbordwidthmenu, _("Set grid outer border width"));
             bordmenu->AppendSubMenu(selouterbordwidthmenu,
@@ -2112,6 +2116,14 @@ struct TSFrame : wxFrame {
         }
     }
 
+    void ToggleToolbarTool(int action, bool checked) {
+        wxAuiPaneInfoArray &all_panes = aui.GetAllPanes();
+        for (size_t i = 0; i < all_panes.GetCount(); ++i) {
+            auto toolbar = dynamic_cast<wxAuiToolBar *>(all_panes.Item(i).window);
+            if (toolbar && toolbar->FindTool(action)) toolbar->ToggleTool(action, checked);
+        }
+    }
+
     bool PerspectiveHasCurrentToolbarLayout(const wxString &perspective) const {
         if (perspective.IsEmpty()) return false;
         for (const auto &section : ToolbarSectionDefinitions()) {
@@ -2284,6 +2296,7 @@ struct TSFrame : wxFrame {
             OneToOne,
             SaveImage,
             PreviousSearch,
+            BorderPaint,
         };
 
         auto MakeGlyphToolBitmap = [&](ToolbarGlyph glyph) {
@@ -2555,6 +2568,14 @@ struct TSFrame : wxFrame {
                     Line(14, 14, 19, 19);
                     ArrowLeft(4, 18, 12);
                     break;
+                case ToolbarGlyph::BorderPaint:
+                    Rect(4, 5, 9, 9, 1);
+                    Line(4, 10, 13, 10, 1);
+                    Line(9, 5, 9, 14, 1);
+                    Line(15, 5, 20, 10);
+                    Line(20, 10, 12, 18);
+                    FillRect(11, 17, 3, 3);
+                    break;
             }
 
             dc.SelectObject(wxNullBitmap);
@@ -2717,6 +2738,9 @@ struct TSFrame : wxFrame {
         bordercolortb->AddControl(bordercolordropdown);
         AddPngTool(bordercolortb, _("Apply last border color"), A_LASTBORDCOLOR, "apply.png",
                    "A");
+        AddGlyphTool(bordercolortb, ToolbarGlyph::BorderPaint, A_BORDERPAINT,
+                     _("Paint individual grid lines with the last border color"), wxITEM_CHECK);
+        bordercolortb->ToggleTool(A_BORDERPAINT, borderpaintmode);
         AddToolbarIcon(bordercolortb, _("Reset colors"), A_RESETCOLOR, "cancel.svg",
                        "cancel_dark.svg");
 
@@ -3015,6 +3039,16 @@ struct TSFrame : wxFrame {
                 break;
             case A_EXPLORERREVEALACTIVE:
                 RevealCurrentDocumentInExplorer();
+                break;
+
+            case A_BORDERPAINT:
+                borderpaintmode = ce.IsChecked();
+                if (GetMenuBar()) GetMenuBar()->Check(A_BORDERPAINT, borderpaintmode);
+                ToggleToolbarTool(A_BORDERPAINT, borderpaintmode);
+                if (auto tab = GetCurrentTab()) tab->doc->FinishBorderPaint();
+                SetStatus(borderpaintmode
+                              ? _("Border painter: click or drag grid lines to paint them.")
+                              : _("Border painter off."));
                 break;
 
             case A_ALEFT: canvas->CursorScroll(-g_scrollratecursor, 0); break;

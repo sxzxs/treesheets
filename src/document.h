@@ -84,6 +84,8 @@ struct Document {
     int image_resize_start_width {0};
     int image_resize_start_height {0};
     wxPoint image_resize_anchor;
+    bool borderpaint_undo_added {false};
+    Selection borderpaint_last;
     bool searchfilter {false};
     int editfilter {0};
     wxDateTime lastmodificationtime;
@@ -111,6 +113,39 @@ struct Document {
     }
 
     uint Background() { return root ? root->cellcolor : 0xFFFFFF; }
+
+    void BeginBorderPaint() {
+        borderpaint_undo_added = false;
+        borderpaint_last = Selection();
+    }
+
+    void FinishBorderPaint() {
+        borderpaint_undo_added = false;
+        borderpaint_last = Selection();
+    }
+
+    bool SameBorderPaintTarget(const Selection &a, const Selection &b) const {
+        return a.grid == b.grid && a.x == b.x && a.y == b.y && a.xs == b.xs && a.ys == b.ys;
+    }
+
+    bool PaintHoveredBorderLine() {
+        if (!hover.grid || !hover.Thin()) return false;
+        if (!hover.grid->BorderLineForSelection(hover)) return false;
+        if (borderpaint_last.grid && SameBorderPaintTarget(borderpaint_last, hover)) return true;
+
+        if (!hover.grid->BorderLineNeedsPaint(hover, sys->lastbordcolor)) {
+            borderpaint_last = hover;
+            return true;
+        }
+
+        if (!borderpaint_undo_added) {
+            hover.grid->cell->AddUndo(this);
+            borderpaint_undo_added = true;
+        }
+        auto painted = hover.grid->PaintBorderLine(hover, sys->lastbordcolor);
+        if (painted) borderpaint_last = hover;
+        return painted;
+    }
 
     void InitCellSelect(Cell *initialselected, int xsize, int ysize) {
         if (!initialselected) {

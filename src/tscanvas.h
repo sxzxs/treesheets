@@ -47,6 +47,24 @@ struct TSCanvas : public wxScrolledCanvas {
             return;
         }
 
+        if (frame->borderpaintmode) {
+            wxInfoDC dc(this);
+            doc->UpdateHover(dc, me.GetX(), me.GetY());
+            if (me.LeftIsDown()) {
+                if (doc->PaintHoveredBorderLine()) {
+                    if (!HasCapture()) CaptureMouse();
+                    sys->frame->UpdateStatus(doc->hover, true);
+                    Refresh();
+                }
+            } else {
+                SetCursor(wxCursor(wxCURSOR_CROSS));
+                if (doc->hover != doc->prev && !doc->hover.Thin())
+                    sys->frame->UpdateStatus(doc->hover, false);
+            }
+            lastmousepos = me.GetPosition();
+            return;
+        }
+
         wxInfoDC dc(this);
         doc->UpdateHover(dc, me.GetX(), me.GetY());
         if (me.LeftIsDown() || me.RightIsDown()) {
@@ -104,6 +122,18 @@ struct TSCanvas : public wxScrolledCanvas {
         if (frame->filter) frame->filter->SetFocus();
         #endif
         SetFocus();
+        if (frame->borderpaintmode) {
+            wxInfoDC dc(this);
+            doc->UpdateHover(dc, me.GetX(), me.GetY());
+            doc->BeginBorderPaint();
+            if (!HasCapture()) CaptureMouse();
+            if (doc->PaintHoveredBorderLine()) {
+                sys->frame->UpdateStatus(doc->hover, true);
+                Refresh();
+            }
+            SetCursor(wxCursor(wxCURSOR_CROSS));
+            return;
+        }
         if (!me.ShiftDown() && doc->StartImageResize(me.GetX(), me.GetY())) {
             if (!HasCapture()) CaptureMouse();
             Refresh();
@@ -119,6 +149,12 @@ struct TSCanvas : public wxScrolledCanvas {
         if (doc->FinishImageResize()) {
             if (HasCapture()) ReleaseMouse();
             sys->frame->UpdateStatus(doc->selected, true);
+            Refresh();
+            return;
+        }
+        if (frame->borderpaintmode) {
+            doc->FinishBorderPaint();
+            if (HasCapture()) ReleaseMouse();
             Refresh();
             return;
         }
@@ -141,6 +177,7 @@ struct TSCanvas : public wxScrolledCanvas {
     }
 
     void OnLeftDoubleClick(wxMouseEvent &me) {
+        if (frame->borderpaintmode) return;
         wxInfoDC dc(this);
         doc->UpdateHover(dc, me.GetX(), me.GetY());
         doc->DoubleClick();
