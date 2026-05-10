@@ -2035,6 +2035,64 @@ struct TSFrame : wxFrame {
         });
     }
 
+    bool SameNormalizedPath(const wxString &a, const wxString &b) const {
+        auto left = NormalizeExplorerPath(a);
+        auto right = NormalizeExplorerPath(b);
+        #ifdef __WXMSW__
+            left.MakeLower();
+            right.MakeLower();
+        #endif
+        return !left.IsEmpty() && left == right;
+    }
+
+    bool ReloadDocumentIfChangedOnDisk(Document *doc, int page) {
+        if (!doc || doc->filename.IsEmpty() || !wxFileExists(doc->filename)) return false;
+        auto modtime = wxFileName(doc->filename).GetModificationTime();
+        if (!modtime.IsValid()) return false;
+        if (!doc->lastmodificationtime.IsValid()) {
+            doc->lastmodificationtime = modtime;
+            return false;
+        }
+        if (modtime == doc->lastmodificationtime) return false;
+        if (watcherwaitingforuser) return true;
+
+        if (doc->modified) {
+            auto message = wxString::Format(
+                _("%s\nhas been modified on disk by another program / computer:\nWould you like to discard your changes and re-load from disk?"),
+                doc->filename);
+            watcherwaitingforuser = true;
+            int res = wxMessageBox(message, _("File modification conflict!"),
+                                   wxYES_NO | wxICON_QUESTION, this);
+            watcherwaitingforuser = false;
+            if (res != wxYES) {
+                doc->lastmodificationtime = modtime;
+                SetStatus(_("External file modification ignored."));
+                return true;
+            }
+        }
+
+        auto filename = doc->filename;
+        auto message = sys->LoadDB(filename, true, page);
+        if (!message.IsEmpty()) {
+            doc->lastmodificationtime = modtime;
+            SetStatus(message);
+        } else {
+            notebook->DeletePage(page + 1);
+            ::wxRemoveFile(sys->TmpName(filename));
+            SetStatus(
+                _("File has been re-loaded because of modifications of another program / computer"));
+        }
+        return true;
+    }
+
+    void CheckForExternallyModifiedDocuments() {
+        if (!notebook || watcherwaitingforuser || !sys->fswatch) return;
+        loop(i, notebook->GetPageCount()) {
+            auto canvas = static_cast<TSCanvas *>(notebook->GetPage(i));
+            if (ReloadDocumentIfChangedOnDisk(canvas->doc.get(), i)) return;
+        }
+    }
+
     // event handling functions
 
     void OnMenu(wxCommandEvent &ce) {
@@ -2551,41 +2609,8 @@ struct TSFrame : wxFrame {
         const auto &modfile = event.GetPath().GetFullPath();
         loop(i, notebook->GetPageCount()) {
             Document *doc = static_cast<TSCanvas *>(notebook->GetPage(i))->doc.get();
-            if (modfile == doc->filename) {
-                auto modtime = wxFileName(modfile).GetModificationTime();
-                // Compare with last modified to trigger multiple times.
-                if (!modtime.IsValid() || !doc->lastmodificationtime.IsValid() ||
-                    modtime == doc->lastmodificationtime) {
-                    return;
-                }
-                if (doc->modified) {
-                    // TODO: this dialog is problematic since it may be on an unattended
-                    // computer and more of these events may fire. since the occurrence of this
-                    // situation is rare, it may be better to just take the most
-                    // recently changed version (which is the one that has just been modified
-                    // on disk) this potentially throws away local changes, but this can only
-                    // happen if the user left changes unsaved, then decided to go edit an older
-                    // version on another computer.
-                    // for now, we leave this code active, and guard it with
-                    // watcherwaitingforuser
-                    auto message = wxString::Format(
-                        _("%s\nhas been modified on disk by another program / computer:\nWould you like to discard your changes and re-load from disk?"),
-                        doc->filename);
-                    watcherwaitingforuser = true;
-                    int res = wxMessageBox(message, _("File modification conflict!"),
-                                           wxYES_NO | wxICON_QUESTION, this);
-                    watcherwaitingforuser = false;
-                    if (res != wxYES) return;
-                }
-                auto message = sys->LoadDB(doc->filename, true, i);
-                if (!message.IsEmpty()) {
-                    SetStatus(message);
-                } else {
-                    notebook->DeletePage(i + 1);
-                    ::wxRemoveFile(sys->TmpName(modfile));
-                    SetStatus(
-                        _("File has been re-loaded because of modifications of another program / computer"));
-                }
+            if (SameNormalizedPath(modfile, doc->filename)) {
+                ReloadDocumentIfChangedOnDisk(doc, i);
                 return;
             }
         }

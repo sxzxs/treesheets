@@ -386,6 +386,8 @@ treesheets::System *treesheets::sys = nullptr;
     treesheets::TreeSheetsScriptImpl treesheets::tssi;
 #endif
 
-IMPLEMENT_APP(treesheets::TSApp)
+#ifndef TREESHEETS_TESTING
+    IMPLEMENT_APP(treesheets::TSApp)
+#endif
 
 #include "events.h"

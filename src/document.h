@@ -112,7 +112,7 @@ struct Document {
         SetSelect(initialselected->parent->grid->FindCell(initialselected));
         selected.xs = xsize;
         selected.ys = ysize;
-        sys->frame->UpdateStatus(selected, true);
+        if (sys->frame) sys->frame->UpdateStatus(selected, true);
     }
 
     void InitWith(unique_ptr<Cell> root, const wxString &filename, Cell *initialselected, int xsize, int ysize) {
@@ -122,6 +122,7 @@ struct Document {
     }
 
     void UpdateFileName(int page = -1) {
+        if (!sys->frame) return;
         sys->frame->SetPageTitle(filename, modified ? (lastmodsinceautosave ? "*" : "+") : "",
                                  page);
     }

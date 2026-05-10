@@ -1,5 +1,5 @@
 struct System {
-    TSFrame *frame;
+    TSFrame *frame {nullptr};
     wxString defaultfont {
         #ifdef WIN32
             "Lucida Sans Unicode"
@@ -342,8 +342,9 @@ struct System {
     }
 
     void FileUsed(const wxString &filename, Document *doc) {
+        if (!frame) return;
         frame->filehistory.AddFileToHistory(filename);
-        if (fswatch) {
+        if (fswatch && frame->watcher) {
             doc->lastmodificationtime = wxFileName(filename).GetModificationTime();
             const auto &directorypath = wxFileName(filename).GetPath(wxPATH_GET_VOLUME | wxPATH_GET_SEPARATOR);
             if (watchedpaths.insert(directorypath).second) {
@@ -381,6 +382,7 @@ struct System {
             static_cast<TSCanvas *>(frame->notebook->GetPage(i))
                 ->doc->AutoSave(!frame->IsActive(), i);
         }
+        frame->CheckForExternallyModifiedDocuments();
     }
 
     void SaveAll() {

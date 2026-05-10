@@ -47,6 +47,10 @@ jobs:
         -DTREESHEETS_VERSION=${{ github.run_number }}
     - name: build and package TreeSheets
       run: cmake --build _build --target package -j4
+    - name: run tests
+      run: |
+        cmake --build _build --config Release --target TreeSheetsTests -j4
+        ctest --test-dir _build -C Release --output-on-failure
     - name: Remove epoch from .deb filename
       run: |
         shopt -s extglob
@@ -103,6 +107,10 @@ jobs:
         ${{ matrix.extra_flags }}
     - name: build and package
       run: cmake --build _build --config Release --target package -j
+    - name: run tests
+      run: |
+        cmake --build _build --config Release --target TreeSheetsTests -j
+        ctest --test-dir _build -C Release --output-on-failure
     - name: Create release
       if: github.event_name == 'push'
       uses: ncipollo/release-action@v1
@@ -148,6 +156,10 @@ jobs:
       run: cmake -S . -B _build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET="$minmac" -DwxBUILD_SHARED=OFF -DwxBUILD_INSTALL=OFF -DwxUSE_SYS_LIBS=OFF -DTREESHEETS_VERSION=${{ github.run_number }}
     - name: Build and package TreeSheets
       run: cmake --build _build --target package -j4
+    - name: run tests
+      run: |
+        cmake --build _build --config Release --target TreeSheetsTests -j4
+        ctest --test-dir _build -C Release --output-on-failure
     - name: Create release
       if: github.event_name == 'push'
       uses: ncipollo/release-action@v1
