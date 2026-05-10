@@ -72,6 +72,9 @@ void TestCellRoundTripPreservesGridFormattingAndSelectionMarker() {
     root->text.t = "root";
     root->text.relsize = 2;
     root->text.stylebits = STYLE_BOLD | STYLE_UNDERLINE;
+    root->text.richstyles.push_back(
+        {1, 3, 0xABCDEF, STYLE_ITALIC,
+         treesheets::Text::RICH_STYLE_COLOR | treesheets::Text::RICH_STYLE_BITS});
     root->cellcolor = 0xCCDCE2;
     root->textcolor = 0x123456;
     root->bordercolor = 0x654321;
@@ -116,6 +119,11 @@ void TestCellRoundTripPreservesGridFormattingAndSelectionMarker() {
     CHECK_EQ(loaded->text.t, wxString("root"));
     CHECK_EQ(loaded->text.relsize, 2);
     CHECK_EQ(loaded->text.stylebits, STYLE_BOLD | STYLE_UNDERLINE);
+    CHECK_EQ(loaded->text.richstyles.size(), static_cast<size_t>(1));
+    CHECK_EQ(loaded->text.richstyles[0].start, 1);
+    CHECK_EQ(loaded->text.richstyles[0].end, 3);
+    CHECK_EQ(loaded->text.richstyles[0].color, 0xABCDEFu);
+    CHECK_EQ(loaded->text.richstyles[0].stylebits, STYLE_ITALIC);
     CHECK_EQ(loaded->cellcolor, 0xCCDCE2u);
     CHECK_EQ(loaded->textcolor, 0x123456u);
     CHECK_EQ(loaded->bordercolor, 0x654321u);

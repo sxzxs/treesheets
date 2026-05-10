@@ -276,6 +276,8 @@ struct TSFrame : wxFrame {
                      _("Apply last border color to selection outline"));
             MyAppend(bordmenu, A_SEL_BORD_INNER_COLOR,
                      _("Apply last border color to selection inner borders"));
+            MyAppend(bordmenu, A_SEL_BORD_OUTER_CLEAR, _("Clear selection outline borders"));
+            MyAppend(bordmenu, A_SEL_BORD_INNER_CLEAR, _("Clear selection inner borders"));
             bordmenu->AppendSeparator();
             bordmenu->AppendCheckItem(A_BORDERPAINT, _("Border color painter"),
                                       _("Paint individual grid lines with the last border color"));
@@ -2739,7 +2741,8 @@ struct TSFrame : wxFrame {
         AddPngTool(bordercolortb, _("Apply last border color"), A_LASTBORDCOLOR, "apply.png",
                    "A");
         AddGlyphTool(bordercolortb, ToolbarGlyph::BorderPaint, A_BORDERPAINT,
-                     _("Paint individual grid lines with the last border color"), wxITEM_CHECK);
+                     _("Paint individual grid lines with the selected border color"),
+                     wxITEM_CHECK);
         bordercolortb->ToggleTool(A_BORDERPAINT, borderpaintmode);
         AddToolbarIcon(bordercolortb, _("Reset colors"), A_RESETCOLOR, "cancel.svg",
                        "cancel_dark.svg");
@@ -3047,7 +3050,7 @@ struct TSFrame : wxFrame {
                 ToggleToolbarTool(A_BORDERPAINT, borderpaintmode);
                 if (auto tab = GetCurrentTab()) tab->doc->FinishBorderPaint();
                 SetStatus(borderpaintmode
-                              ? _("Border painter: click or drag grid lines to paint them.")
+                              ? _("Border painter: click or drag grid lines to paint them with the selected color.")
                               : _("Border painter off."));
                 break;
 

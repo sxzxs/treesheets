@@ -48,7 +48,7 @@ class Selection {
         firstdx = firstdy = 0;
     }
 
-    bool TextEdit() { return textedit; }
+    bool TextEdit() const { return textedit; }
     void EnterEditOnly(Document *doc) {
         textedit = true;
         SetCursorEdit(doc, true);

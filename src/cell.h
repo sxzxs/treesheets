@@ -59,6 +59,7 @@ struct Cell {
     void Clear() {
         grid = nullptr;
         text.t.Clear();
+        text.richstyles.clear();
         text.image = nullptr;
         text.ResetImageScale();
         mergexs = mergeys = 1;
@@ -105,7 +106,7 @@ struct Cell {
                 leftoffset = dc.GetCharHeight();
             }
         } else {
-            text.TextSize(dc, sx, sy, tiny, leftoffset, maxcolwidth);
+            text.TextSize(doc, dc, sx, sy, tiny, leftoffset, maxcolwidth, depth);
         }
         if (ixs && iys) {
             sx += ixs + 2;
@@ -535,12 +536,14 @@ struct Cell {
         if (!HasText() || !selection.TextEdit()) { note = original->note; }
         if (!selection.TextEdit()) bordercolor = original->bordercolor;
         if (original->HasText()) {
+            auto was_text_edit = selection.TextEdit();
             if (!HasText() || !selection.TextEdit()) {
                 cellcolor = original->cellcolor;
                 textcolor = original->textcolor;
                 text.stylebits = original->text.stylebits;
             }
             text.Insert(document, original->text.t, selection, false);
+            if (!was_text_edit) text.richstyles = original->text.richstyles;
         }
         if (original->text.image) text.image = original->text.image;
         if (original->grid) {
@@ -625,6 +628,7 @@ struct Cell {
                     doc->tags[text.t] = color;
                 } else {
                     textcolor = color;
+                    text.ClearRichColors();
                 }
                 break;
             case A_BORDCOLOR:

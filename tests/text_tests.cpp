@@ -98,6 +98,35 @@ void TestBackspaceDeletesOneGraphemeCluster() {
     CHECK_EQ(selection.cursor, 0);
 }
 
+void TestRichStylesApplyToSelectionAndTrackDeletes() {
+    treesheets::Text text;
+    text.t = "abcdef";
+    treesheets::Selection selection;
+    selection.cursor = 1;
+    selection.cursorend = 4;
+
+    text.ToggleRichStyle(selection, STYLE_BOLD, g_textcolor_default, 0);
+    text.SetRichColor(selection, 0x112233, g_textcolor_default, 0);
+
+    CHECK_EQ(text.richstyles.size(), static_cast<size_t>(1));
+    CHECK_EQ(text.richstyles[0].start, 1);
+    CHECK_EQ(text.richstyles[0].end, 4);
+    CHECK(text.StyleBitsAt(0, 0) == 0);
+    CHECK(text.StyleBitsAt(2, 0) & STYLE_BOLD);
+    CHECK_EQ(text.ColorAt(2, g_textcolor_default), 0x112233u);
+
+    selection.cursor = 2;
+    selection.cursorend = 3;
+    text.Delete(selection);
+
+    CHECK_EQ(text.t, wxString("abdef"));
+    CHECK_EQ(text.richstyles.size(), static_cast<size_t>(1));
+    CHECK_EQ(text.richstyles[0].start, 1);
+    CHECK_EQ(text.richstyles[0].end, 3);
+    CHECK(text.StyleBitsAt(2, 0) & STYLE_BOLD);
+    CHECK_EQ(text.ColorAt(2, g_textcolor_default), 0x112233u);
+}
+
 }  // namespace
 
 int main() {
@@ -108,6 +137,7 @@ int main() {
     TestHardLineBreaksAreLines();
     TestSoftWrapKeepsWordsTogether();
     TestBackspaceDeletesOneGraphemeCluster();
+    TestRichStylesApplyToSelectionAndTrackDeletes();
 
     return Finish("text tests passed");
 }

@@ -189,7 +189,7 @@ struct Grid {
         loop(i, span) sizes[i] += add;
     }
 
-    bool MergeIntersects(int x, int y, int mxs, int mys, const Selection &sel) {
+    bool MergeIntersects(int x, int y, int mxs, int mys, const Selection &sel) const {
         return x < sel.x + sel.xs && x + mxs > sel.x && y < sel.y + sel.ys &&
                y + mys > sel.y;
     }
@@ -360,10 +360,12 @@ struct Grid {
 
         for (int y = 0; y < ys; y++)
             for (int x = 0; x <= xs; x++)
-                drawsegment(VBorder(x, y), linex(x), liney(y), linex(x), liney(y + 1));
+                if (BorderLineForSelection(Selection(cell->grid, x, y, 0, 1)))
+                    drawsegment(VBorder(x, y), linex(x), liney(y), linex(x), liney(y + 1));
         for (int y = 0; y <= ys; y++)
             for (int x = 0; x < xs; x++)
-                drawsegment(HBorder(x, y), linex(x), liney(y), linex(x + 1), liney(y));
+                if (BorderLineForSelection(Selection(cell->grid, x, y, 1, 0)))
+                    drawsegment(HBorder(x, y), linex(x), liney(y), linex(x + 1), liney(y));
     }
 
     void Render(Document *doc, int bx, int by, wxDC &dc, int depth, int sx, int sy, int xoff,
@@ -485,6 +487,22 @@ struct Grid {
     }
 
     void FindXY(Document *doc, int px, int py, wxReadOnlyDC &dc) {
+        auto column_at = [&](int startx, int starty, int span) {
+            for (int xx = 0; xx < span; xx++) {
+                auto cc = C(startx + xx, starty).get();
+                auto right = xx + 1 < span ? C(startx + xx + 1, starty)->ox : cc->ox + cc->sx;
+                if (px >= cc->ox && px < right) return startx + xx;
+            }
+            return startx + span - 1;
+        };
+        auto row_at = [&](int startx, int starty, int span) {
+            for (int yy = 0; yy < span; yy++) {
+                auto cc = C(startx, starty + yy).get();
+                auto bottom = yy + 1 < span ? C(startx, starty + yy + 1)->oy : cc->oy + cc->sy;
+                if (py >= cc->oy && py < bottom) return starty + yy;
+            }
+            return starty + span - 1;
+        };
         foreachcell(c) {
             if (IsCovered(x, y)) continue;
             int mxs = MergeXS(x, y);
@@ -492,21 +510,21 @@ struct Grid {
             int bx = px - c->ox;
             int by = py - c->oy;
             if (bx >= 0 && by >= -g_line_width - g_selmargin && bx < c->sx && by < g_selmargin) {
-                doc->hover = Selection(cell->grid, x, y, 1, 0);
+                doc->hover = Selection(cell->grid, column_at(x, y, mxs), y, 1, 0);
                 return;
             }
             if (bx >= 0 && by >= c->sy - g_selmargin && bx < c->sx &&
                 by < c->sy + g_line_width + g_selmargin) {
-                doc->hover = Selection(cell->grid, x, y + mys, 1, 0);
+                doc->hover = Selection(cell->grid, column_at(x, y, mxs), y + mys, 1, 0);
                 return;
             }
             if (bx >= -g_line_width - g_selmargin && by >= 0 && bx < g_selmargin && by < c->sy) {
-                doc->hover = Selection(cell->grid, x, y, 0, 1);
+                doc->hover = Selection(cell->grid, x, row_at(x, y, mys), 0, 1);
                 return;
             }
             if (bx >= c->sx - g_selmargin && by >= 0 && bx < c->sx + g_line_width + g_selmargin &&
                 by < c->sy) {
-                doc->hover = Selection(cell->grid, x + mxs, y, 0, 1);
+                doc->hover = Selection(cell->grid, x + mxs, row_at(x, y, mys), 0, 1);
                 return;
             }
             if (c->IsInside(bx, by)) {
@@ -1016,64 +1034,149 @@ struct Grid {
         }
     }
 
+    struct BorderLineRange {
+        bool horizontal {false};
+        int x {0};
+        int y {0};
+        int length {0};
+    };
+
+    bool BorderLineRangeForSelection(const Selection &sel, BorderLineRange &range) const {
+        if (!sel.Thin()) return false;
+        if (sel.xs == 1 && sel.ys == 0 && sel.x >= 0 && sel.x < xs && sel.y >= 0 &&
+            sel.y <= ys) {
+            range = {true, sel.x, sel.y, 1};
+            foreachcellconst(c) if (!IsCovered(x, y)) {
+                int mxs = MergeXS(x, y);
+                int mys = MergeYS(x, y);
+                if (sel.x < x || sel.x >= x + mxs) continue;
+                if (sel.y > y && sel.y < y + mys) return false;
+            }
+            return true;
+        }
+        if (sel.xs == 0 && sel.ys == 1 && sel.x >= 0 && sel.x <= xs && sel.y >= 0 &&
+            sel.y < ys) {
+            range = {false, sel.x, sel.y, 1};
+            foreachcellconst(c) if (!IsCovered(x, y)) {
+                int mxs = MergeXS(x, y);
+                int mys = MergeYS(x, y);
+                if (sel.y < y || sel.y >= y + mys) continue;
+                if (sel.x > x && sel.x < x + mxs) return false;
+            }
+            return true;
+        }
+        return false;
+    }
+
+    bool BorderStyleNeedsPaint(const BorderLineStyle &style, uint color) const {
+        auto width = style.Visible() ? style.width : DefaultSelectionBorderWidth();
+        return style.color != color || style.width != width;
+    }
+
+    Selection ExpandSelectionToMergedCells(const Selection &sel) const {
+        if (sel.Thin()) return sel;
+        Selection expanded = sel;
+        bool changed;
+        do {
+            changed = false;
+            foreachcellconst(c) if (!IsCovered(x, y)) {
+                int mxs = MergeXS(x, y);
+                int mys = MergeYS(x, y);
+                if (!MergeIntersects(x, y, mxs, mys, expanded)) continue;
+                int nx = min(expanded.x, x);
+                int ny = min(expanded.y, y);
+                int nx2 = max(expanded.x + expanded.xs, x + mxs);
+                int ny2 = max(expanded.y + expanded.ys, y + mys);
+                if (nx != expanded.x || ny != expanded.y || nx2 != expanded.x + expanded.xs ||
+                    ny2 != expanded.y + expanded.ys) {
+                    expanded.x = nx;
+                    expanded.y = ny;
+                    expanded.xs = nx2 - nx;
+                    expanded.ys = ny2 - ny;
+                    changed = true;
+                }
+            }
+        } while (changed);
+        return expanded;
+    }
+
+    void SetBorderLine(const Selection &sel, uint color, int visible_width, bool set_width) {
+        BorderLineRange range;
+        if (!BorderLineRangeForSelection(sel, range)) return;
+        for (int i = 0; i < range.length; i++) {
+            auto &style =
+                range.horizontal ? HBorder(range.x + i, range.y) : VBorder(range.x, range.y + i);
+            SetBorderStyle(style, color, visible_width, set_width);
+        }
+    }
+
     BorderLineStyle *BorderLineForSelection(const Selection &sel) {
-        if (!sel.Thin()) return nullptr;
-        if (sel.xs == 1 && sel.ys == 0 && sel.x >= 0 && sel.x < xs && sel.y >= 0 && sel.y <= ys)
-            return &HBorder(sel.x, sel.y);
-        if (sel.xs == 0 && sel.ys == 1 && sel.x >= 0 && sel.x <= xs && sel.y >= 0 && sel.y < ys)
-            return &VBorder(sel.x, sel.y);
-        return nullptr;
+        BorderLineRange range;
+        if (!BorderLineRangeForSelection(sel, range)) return nullptr;
+        return range.horizontal ? &HBorder(range.x, range.y) : &VBorder(range.x, range.y);
     }
 
     const BorderLineStyle *BorderLineForSelection(const Selection &sel) const {
-        if (!sel.Thin()) return nullptr;
-        if (sel.xs == 1 && sel.ys == 0 && sel.x >= 0 && sel.x < xs && sel.y >= 0 && sel.y <= ys)
-            return &HBorder(sel.x, sel.y);
-        if (sel.xs == 0 && sel.ys == 1 && sel.x >= 0 && sel.x <= xs && sel.y >= 0 && sel.y < ys)
-            return &VBorder(sel.x, sel.y);
-        return nullptr;
+        BorderLineRange range;
+        if (!BorderLineRangeForSelection(sel, range)) return nullptr;
+        return range.horizontal ? &HBorder(range.x, range.y) : &VBorder(range.x, range.y);
     }
 
     bool BorderLineNeedsPaint(const Selection &sel, uint color) const {
-        auto style = BorderLineForSelection(sel);
-        if (!style) return false;
-        auto width = style->Visible() ? style->width : DefaultSelectionBorderWidth();
-        return style->color != color || style->width != width;
+        BorderLineRange range;
+        if (!BorderLineRangeForSelection(sel, range)) return false;
+        for (int i = 0; i < range.length; i++) {
+            const auto &style =
+                range.horizontal ? HBorder(range.x + i, range.y) : VBorder(range.x, range.y + i);
+            if (BorderStyleNeedsPaint(style, color)) return true;
+        }
+        return false;
     }
 
     bool PaintBorderLine(const Selection &sel, uint color) {
-        auto style = BorderLineForSelection(sel);
-        if (!style) return false;
+        BorderLineRange range;
+        if (!BorderLineRangeForSelection(sel, range)) return false;
         if (!BorderLineNeedsPaint(sel, color)) return false;
-        SetBorderStyle(*style, color, 0, false);
+        SetBorderLine(sel, color, 0, false);
         return true;
     }
 
     void SetSelectionOuterBorder(const Selection &sel, uint color, int visible_width,
                                  bool set_width) {
-        for (int x = sel.x; x < sel.x + sel.xs; x++) {
-            SetBorderStyle(HBorder(x, sel.y), color, visible_width, set_width);
-            SetBorderStyle(HBorder(x, sel.y + sel.ys), color, visible_width, set_width);
+        auto expanded = ExpandSelectionToMergedCells(sel);
+        for (int x = expanded.x; x < expanded.x + expanded.xs; x++) {
+            SetBorderLine(Selection(cell->grid, x, expanded.y, 1, 0), color, visible_width,
+                          set_width);
+            SetBorderLine(Selection(cell->grid, x, expanded.y + expanded.ys, 1, 0), color,
+                          visible_width, set_width);
         }
-        for (int y = sel.y; y < sel.y + sel.ys; y++) {
-            SetBorderStyle(VBorder(sel.x, y), color, visible_width, set_width);
-            SetBorderStyle(VBorder(sel.x + sel.xs, y), color, visible_width, set_width);
+        for (int y = expanded.y; y < expanded.y + expanded.ys; y++) {
+            SetBorderLine(Selection(cell->grid, expanded.x, y, 0, 1), color, visible_width,
+                          set_width);
+            SetBorderLine(Selection(cell->grid, expanded.x + expanded.xs, y, 0, 1), color,
+                          visible_width, set_width);
         }
     }
 
     void SetSelectionInnerBorder(const Selection &sel, uint color, int visible_width,
                                  bool set_width) {
-        for (int x = sel.x + 1; x < sel.x + sel.xs; x++)
-            for (int y = sel.y; y < sel.y + sel.ys; y++)
-                SetBorderStyle(VBorder(x, y), color, visible_width, set_width);
-        for (int y = sel.y + 1; y < sel.y + sel.ys; y++)
-            for (int x = sel.x; x < sel.x + sel.xs; x++)
-                SetBorderStyle(HBorder(x, y), color, visible_width, set_width);
+        auto expanded = ExpandSelectionToMergedCells(sel);
+        for (int x = expanded.x + 1; x < expanded.x + expanded.xs; x++)
+            for (int y = expanded.y; y < expanded.y + expanded.ys; y++)
+                SetBorderLine(Selection(cell->grid, x, y, 0, 1), color, visible_width, set_width);
+        for (int y = expanded.y + 1; y < expanded.y + expanded.ys; y++)
+            for (int x = expanded.x; x < expanded.x + expanded.xs; x++)
+                SetBorderLine(Selection(cell->grid, x, y, 1, 0), color, visible_width, set_width);
     }
 
     void ClearSelectionBorders(const Selection &sel) {
-        SetSelectionOuterBorder(sel, g_bordercolor_default, 0, true);
-        SetSelectionInnerBorder(sel, g_bordercolor_default, 0, true);
+        auto expanded = ExpandSelectionToMergedCells(sel);
+        for (int y = expanded.y; y <= expanded.y + expanded.ys; y++)
+            for (int x = expanded.x; x < expanded.x + expanded.xs; x++)
+                SetBorderStyle(HBorder(x, y), g_bordercolor_default, 0, true);
+        for (int y = expanded.y; y < expanded.y + expanded.ys; y++)
+            for (int x = expanded.x; x <= expanded.x + expanded.xs; x++)
+                SetBorderStyle(VBorder(x, y), g_bordercolor_default, 0, true);
     }
 
     void ClearAllCustomBorders() {
@@ -1133,11 +1236,18 @@ struct Grid {
     void SetStyle(Document *doc, const Selection &sel, int sb) {
         cell->AddUndo(doc);
         cell->ResetChildren();
-        foreachcellinsel(c, sel) {
-            c->text.stylebits ^= sb;
-            c->text.WasEdited();
+        if (sel.TextEdit()) {
+            if (auto c = sel.GetCell(); c && c->text.HasSelectionRange(sel)) {
+                c->text.ToggleRichStyle(sel, sb, c->textcolor, c->text.stylebits);
+            } else if (auto c = sel.GetCell()) {
+                c->text.ToggleBaseStyleBit(sb);
+            }
+        } else {
+            foreachcellinsel(c, sel) {
+                c->text.ToggleBaseStyleBit(sb);
+            }
         }
-        doc->canvas->Refresh();
+        if (doc->canvas) doc->canvas->Refresh();
     }
 
     void ColorChange(Document *doc, int which, uint color, const Selection &sel) {
@@ -1145,11 +1255,18 @@ struct Grid {
         cell->ResetChildren();
         if (which == A_BORDCOLOR) {
             bordercolor = color;
-            doc->canvas->Refresh();
+            if (doc->canvas) doc->canvas->Refresh();
             return;
         }
+        if (which == A_TEXTCOLOR && sel.TextEdit()) {
+            if (auto c = sel.GetCell(); c && c->text.HasSelectionRange(sel)) {
+                c->text.SetRichColor(sel, color, c->textcolor, c->text.stylebits);
+                if (doc->canvas) doc->canvas->Refresh();
+                return;
+            }
+        }
         foreachcellinsel(c, sel) c->ColorChange(doc, which, color);
-        doc->canvas->Refresh();
+        if (doc->canvas) doc->canvas->Refresh();
     }
 
     void ReplaceStr(Document *doc, const wxString &s, const wxString &ls, const Selection &sel) {

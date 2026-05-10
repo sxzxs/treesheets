@@ -128,12 +128,24 @@ struct Document {
         return a.grid == b.grid && a.x == b.x && a.y == b.y && a.xs == b.xs && a.ys == b.ys;
     }
 
+    uint CurrentBorderPaintColor() const {
+        auto color = sys->lastbordcolor;
+        if (sys->frame && sys->frame->bordercolordropdown) {
+            auto idx = sys->frame->bordercolordropdown->GetSelection();
+            if (idx >= 0 && idx < static_cast<int>(celltextcolors.size()))
+                color = idx == CUSTOMCOLORIDX ? sys->customcolor : celltextcolors[idx];
+        }
+        sys->lastbordcolor = color;
+        return color;
+    }
+
     bool PaintHoveredBorderLine() {
         if (!hover.grid || !hover.Thin()) return false;
         if (!hover.grid->BorderLineForSelection(hover)) return false;
         if (borderpaint_last.grid && SameBorderPaintTarget(borderpaint_last, hover)) return true;
+        auto color = CurrentBorderPaintColor();
 
-        if (!hover.grid->BorderLineNeedsPaint(hover, sys->lastbordcolor)) {
+        if (!hover.grid->BorderLineNeedsPaint(hover, color)) {
             borderpaint_last = hover;
             return true;
         }
@@ -142,7 +154,7 @@ struct Document {
             hover.grid->cell->AddUndo(this);
             borderpaint_undo_added = true;
         }
-        auto painted = hover.grid->PaintBorderLine(hover, sys->lastbordcolor);
+        auto painted = hover.grid->PaintBorderLine(hover, color);
         if (painted) borderpaint_last = hover;
         return painted;
     }
@@ -1982,6 +1994,17 @@ struct Document {
                 return wxEmptyString;
             }
 
+            case A_SEL_BORD_OUTER_CLEAR:
+            case A_SEL_BORD_INNER_CLEAR:
+                if (selected.Thin()) return NoThin();
+                selected.grid->cell->AddUndo(this);
+                if (action == A_SEL_BORD_OUTER_CLEAR)
+                    selected.grid->SetSelectionOuterBorder(selected, g_bordercolor_default, 0, true);
+                else
+                    selected.grid->SetSelectionInnerBorder(selected, g_bordercolor_default, 0, true);
+                canvas->Refresh();
+                return wxEmptyString;
+
             case A_SEL_BORD_OUTER0:
             case A_SEL_BORD_OUTER1:
             case A_SEL_BORD_OUTER2:
@@ -2031,6 +2054,30 @@ struct Document {
             case A_LASTBORDCOLOR:
             case A_LASTIMAGE:
                 selected.grid->cell->AddUndo(this);
+                if (cell && selected.TextEdit() && cell->text.HasSelectionRange(selected)) {
+                    bool handled = true;
+                    switch (action) {
+                        case A_RESETSTYLE:
+                            cell->text.SetRichStyleBits(selected, 0, cell->textcolor,
+                                                        cell->text.stylebits);
+                            break;
+                        case A_RESETCOLOR:
+                            cell->text.SetRichColor(selected, g_textcolor_default, cell->textcolor,
+                                                    cell->text.stylebits);
+                            break;
+                        case A_LASTTEXTCOLOR:
+                            cell->text.SetRichColor(selected, sys->lasttextcolor, cell->textcolor,
+                                                    cell->text.stylebits);
+                            break;
+                        default: handled = false; break;
+                    }
+                    if (handled) {
+                        selected.grid->cell->ResetChildren();
+                        if (canvas) canvas->Refresh();
+                        if (sys->frame) sys->frame->UpdateStatus(selected, false);
+                        return wxEmptyString;
+                    }
+                }
                 if (action == A_RESETCOLOR) {
                     selected.grid->bordercolor = g_bordercolor_default;
                     if (!selected.Thin()) selected.grid->ClearSelectionBorders(selected);
@@ -2044,13 +2091,17 @@ struct Document {
                             selected.grid->colwidths[x] = sys->defaultmaxcolwidth;
                         selected.grid->cell->ResetLayout();
                         break;
-                    case A_RESETSTYLE: c->text.stylebits = 0; break;
+                    case A_RESETSTYLE:
+                        c->text.stylebits = 0;
+                        c->text.ClearRichStyleBits();
+                        break;
                     case A_RESETCOLOR:
                         if (c->IsTag(this)) {
                             tags[c->text.t] = g_tagcolor_default;
                         } else {
                             c->textcolor = g_textcolor_default;
                         }
+                        c->text.ClearRichColors();
                         c->cellcolor = g_cellcolor_default;
                         c->bordercolor = g_bordercolor_default;
                         if (c->grid) {
@@ -2059,7 +2110,10 @@ struct Document {
                         }
                         break;
                     case A_LASTCELLCOLOR: c->cellcolor = sys->lastcellcolor; break;
-                    case A_LASTTEXTCOLOR: c->textcolor = sys->lasttextcolor; break;
+                    case A_LASTTEXTCOLOR:
+                        c->textcolor = sys->lasttextcolor;
+                        c->text.ClearRichColors();
+                        break;
                     case A_LASTBORDCOLOR: break;
                     case A_LASTIMAGE:
                         if (sys->lastimage) c->text.image = sys->lastimage;

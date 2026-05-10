@@ -75,8 +75,8 @@ void TestCloneSelectionPreservesMergedCellsAndBorders() {
     CHECK_EQ(cloned_grid->HBorder(0, 2).color, 0x112233u);
     CHECK_EQ(cloned_grid->VBorder(0, 0).width, 3);
     CHECK_EQ(cloned_grid->VBorder(2, 1).color, 0x112233u);
-    CHECK_EQ(cloned_grid->VBorder(1, 0).width, 2);
-    CHECK_EQ(cloned_grid->HBorder(0, 1).color, 0x445566u);
+    CHECK_EQ(cloned_grid->VBorder(1, 0).width, 0);
+    CHECK_EQ(cloned_grid->HBorder(0, 1).color, g_bordercolor_default);
 }
 
 void TestInsertColumnCopiesNeighborStyleAndShiftsContent() {
@@ -166,6 +166,102 @@ void TestPaintBorderLineChangesOnlyTargetLine() {
 
     treesheets::Selection cell(root->grid, 0, 0, 1, 1);
     CHECK(!grid->PaintBorderLine(cell, 0x111111));
+}
+
+void TestPaintBorderLineHandlesMergedCellEdgesAndSkipsInteriorLines() {
+    auto root = MakeRoot(3, 3);
+    auto grid = root->grid.get();
+    grid->C(0, 0)->mergexs = 2;
+    grid->C(0, 0)->mergeys = 2;
+    grid->RepairMergedCells();
+
+    CHECK(grid->PaintBorderLine(treesheets::Selection(root->grid, 0, 0, 1, 0), 0x123456));
+    CHECK_EQ(grid->HBorder(0, 0).color, 0x123456u);
+    CHECK_EQ(grid->HBorder(1, 0).color, g_bordercolor_default);
+    CHECK_EQ(grid->HBorder(0, 0).width, grid->DefaultSelectionBorderWidth());
+    CHECK_EQ(grid->HBorder(1, 0).width, 0);
+
+    CHECK(grid->PaintBorderLine(treesheets::Selection(root->grid, 2, 0, 0, 1), 0xABCDEF));
+    CHECK_EQ(grid->VBorder(2, 0).color, 0xABCDEFu);
+    CHECK_EQ(grid->VBorder(2, 1).color, g_bordercolor_default);
+    CHECK_EQ(grid->VBorder(2, 0).width, grid->DefaultSelectionBorderWidth());
+    CHECK_EQ(grid->VBorder(2, 1).width, 0);
+
+    CHECK(!grid->BorderLineForSelection(treesheets::Selection(root->grid, 0, 1, 1, 0)));
+    CHECK(!grid->PaintBorderLine(treesheets::Selection(root->grid, 0, 1, 1, 0), 0x654321));
+    CHECK(!grid->BorderLineForSelection(treesheets::Selection(root->grid, 1, 0, 0, 1)));
+    CHECK(!grid->PaintBorderLine(treesheets::Selection(root->grid, 1, 0, 0, 1), 0x654321));
+}
+
+void TestFindXYTargetsMergedCellBorderSegmentUnderPointer() {
+    treesheets::Document doc;
+    InitDocument(doc, MakeRoot(3, 3));
+    auto grid = doc.root->grid.get();
+    grid->C(1, 1)->mergexs = 2;
+    grid->C(1, 1)->mergeys = 2;
+    grid->RepairMergedCells();
+
+    wxBitmap bitmap(400, 400);
+    wxMemoryDC dc(bitmap);
+    doc.Layout(dc);
+
+    auto master = grid->C(1, 1).get();
+    auto lower_left = grid->C(1, 2).get();
+    grid->FindXY(&doc, master->ox - 1, lower_left->oy + lower_left->sy / 2, dc);
+
+    CHECK(doc.hover.grid == doc.root->grid);
+    CHECK_EQ(doc.hover.x, 1);
+    CHECK_EQ(doc.hover.y, 2);
+    CHECK_EQ(doc.hover.xs, 0);
+    CHECK_EQ(doc.hover.ys, 1);
+}
+
+void TestSelectionBordersExpandMergedCellsAndSkipHiddenInteriorLines() {
+    auto root = MakeRoot(3, 3);
+    auto grid = root->grid.get();
+    grid->C(0, 0)->mergexs = 2;
+    grid->C(0, 0)->mergeys = 2;
+    grid->RepairMergedCells();
+
+    treesheets::Selection merged(root->grid, 0, 0, 1, 1);
+    grid->SetSelectionOuterBorder(merged, 0x112233, 4, true);
+    CHECK_EQ(grid->HBorder(0, 0).color, 0x112233u);
+    CHECK_EQ(grid->HBorder(1, 0).color, 0x112233u);
+    CHECK_EQ(grid->HBorder(0, 2).color, 0x112233u);
+    CHECK_EQ(grid->HBorder(1, 2).color, 0x112233u);
+    CHECK_EQ(grid->VBorder(0, 0).color, 0x112233u);
+    CHECK_EQ(grid->VBorder(0, 1).color, 0x112233u);
+    CHECK_EQ(grid->VBorder(2, 0).color, 0x112233u);
+    CHECK_EQ(grid->VBorder(2, 1).color, 0x112233u);
+    CHECK_EQ(grid->HBorder(1, 0).width, 4);
+    CHECK_EQ(grid->VBorder(2, 1).width, 4);
+
+    grid->SetSelectionOuterBorder(merged, g_bordercolor_default, 0, true);
+    CHECK_EQ(grid->HBorder(0, 0).width, 0);
+    CHECK_EQ(grid->HBorder(1, 0).width, 0);
+    CHECK_EQ(grid->VBorder(2, 0).width, 0);
+    CHECK_EQ(grid->VBorder(2, 1).width, 0);
+
+    grid->SetSelectionInnerBorder(merged, 0x445566, 2, true);
+    CHECK_EQ(grid->HBorder(0, 1).width, 0);
+    CHECK_EQ(grid->HBorder(1, 1).width, 0);
+    CHECK_EQ(grid->VBorder(1, 0).width, 0);
+    CHECK_EQ(grid->VBorder(1, 1).width, 0);
+
+    treesheets::Selection with_neighbor(root->grid, 0, 0, 3, 2);
+    grid->SetSelectionInnerBorder(with_neighbor, 0x778899, 2, true);
+    CHECK_EQ(grid->VBorder(2, 0).color, 0x778899u);
+    CHECK_EQ(grid->VBorder(2, 1).color, 0x778899u);
+    CHECK_EQ(grid->HBorder(2, 1).color, 0x778899u);
+    CHECK_EQ(grid->VBorder(1, 0).width, 0);
+    CHECK_EQ(grid->HBorder(0, 1).width, 0);
+
+    grid->HBorder(0, 1).width = 5;
+    grid->VBorder(1, 0).width = 5;
+    grid->ClearSelectionBorders(merged);
+    CHECK_EQ(grid->HBorder(0, 1).width, 0);
+    CHECK_EQ(grid->VBorder(1, 0).width, 0);
+    CHECK_EQ(grid->VBorder(2, 0).width, 0);
 }
 
 void TestTransposeSwapsCellsAndBorders() {
@@ -269,6 +365,9 @@ int main() {
     TestDeleteColumnRemovesContentAndShrinksBorderStorage();
     TestSetAndClearSelectionBorders();
     TestPaintBorderLineChangesOnlyTargetLine();
+    TestPaintBorderLineHandlesMergedCellEdgesAndSkipsInteriorLines();
+    TestFindXYTargetsMergedCellBorderSegmentUnderPointer();
+    TestSelectionBordersExpandMergedCellsAndSkipHiddenInteriorLines();
     TestTransposeSwapsCellsAndBorders();
     TestSortRowsUsesSelectionColumnFirst();
     TestLargeCloneAndSortStressPreservesDataAndMemoryEstimate();

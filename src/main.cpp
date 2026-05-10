@@ -1,7 +1,7 @@
 #include "stdafx.h"
 #include <IbPinyin/pinyin.hpp>
 
-static const auto TS_VERSION = 29;
+static const auto TS_VERSION = 30;
 static const auto g_grid_margin = 1;
 static const auto g_cell_margin = 2;
 static const auto g_margin_extra = 2;  // TODO, could make this configurable: 0/2/4/6
@@ -181,6 +181,8 @@ enum {
     A_SEL_BORD_INNER_COLOR,
     A_SEL_BORD_OUTER_COLOR_PICK,
     A_SEL_BORD_INNER_COLOR_PICK,
+    A_SEL_BORD_OUTER_CLEAR,
+    A_SEL_BORD_INNER_CLEAR,
     A_BORDERPAINT,
     A_SEL_BORD_OUTER0,
     A_SEL_BORD_OUTER1,

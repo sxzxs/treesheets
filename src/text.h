@@ -14,6 +14,26 @@ struct Text {
     wxDateTime lastedit;
     bool filtered {false};
 
+    static constexpr wxUint8 RICH_STYLE_COLOR = 1;
+    static constexpr wxUint8 RICH_STYLE_BITS = 2;
+
+    struct RichStyle {
+        int start {0};
+        int end {0};
+        uint color {g_textcolor_default};
+        int stylebits {0};
+        wxUint8 flags {0};
+
+        bool HasColor() const { return flags & RICH_STYLE_COLOR; }
+        bool HasStyleBits() const { return flags & RICH_STYLE_BITS; }
+        bool HasAny() const { return flags; }
+        bool SameStyle(const RichStyle &o) const {
+            return flags == o.flags && color == o.color && stylebits == o.stylebits;
+        }
+    };
+
+    vector<RichStyle> richstyles;
+
     void WasEdited() { lastedit = wxDateTime::Now(); }
 
     Text() { WasEdited(); }
@@ -67,7 +87,8 @@ struct Text {
 
     size_t EstimatedMemoryUse() {
         ASSERT(wxUSE_UNICODE);
-        return sizeof(Text) + t.Length() * sizeof(wchar_t);
+        return sizeof(Text) + t.Length() * sizeof(wchar_t) +
+               richstyles.size() * sizeof(RichStyle);
     }
 
     double GetNum() {
@@ -100,6 +121,239 @@ struct Text {
         t = s;
     }
 
+    int TextLength() const { return static_cast<int>(t.Len()); }
+    uint BaseColor() const { return cell ? cell->textcolor : g_textcolor_default; }
+
+    RichStyle RichStyleAt(int pos, uint basecolor, int basestylebits) const {
+        pos = max(0, min(pos, max(0, TextLength() - 1)));
+        RichStyle style;
+        style.color = basecolor;
+        style.stylebits = basestylebits;
+        for (auto &rich : richstyles) {
+            if (rich.start <= pos && pos < rich.end) {
+                if (rich.HasColor()) {
+                    style.flags |= RICH_STYLE_COLOR;
+                    style.color = rich.color;
+                }
+                if (rich.HasStyleBits()) {
+                    style.flags |= RICH_STYLE_BITS;
+                    style.stylebits = rich.stylebits;
+                }
+                break;
+            }
+        }
+        return style;
+    }
+
+    uint ColorAt(int pos, uint basecolor) const {
+        auto style = RichStyleAt(pos, basecolor, stylebits);
+        return style.HasColor() ? style.color : basecolor;
+    }
+
+    int StyleBitsAt(int pos, int basestylebits) const {
+        auto style = RichStyleAt(pos, BaseColor(), basestylebits);
+        return style.HasStyleBits() ? style.stylebits : basestylebits;
+    }
+
+    void NormalizeRichStyles(uint basecolor, int basestylebits) {
+        auto len = TextLength();
+        vector<RichStyle> normalized;
+        normalized.reserve(richstyles.size());
+        std::sort(richstyles.begin(), richstyles.end(),
+                  [](const RichStyle &a, const RichStyle &b) {
+                      return a.start == b.start ? a.end < b.end : a.start < b.start;
+                  });
+        for (auto rich : richstyles) {
+            rich.start = max(0, min(rich.start, len));
+            rich.end = max(0, min(rich.end, len));
+            if (rich.start >= rich.end) continue;
+            if (rich.HasColor() && rich.color == basecolor) rich.flags &= ~RICH_STYLE_COLOR;
+            if (rich.HasStyleBits() && rich.stylebits == basestylebits)
+                rich.flags &= ~RICH_STYLE_BITS;
+            if (!rich.HasAny()) continue;
+            if (!normalized.empty() && normalized.back().end == rich.start &&
+                normalized.back().SameStyle(rich)) {
+                normalized.back().end = rich.end;
+            } else {
+                normalized.push_back(rich);
+            }
+        }
+        richstyles = std::move(normalized);
+    }
+
+    void NormalizeRichStyles() { NormalizeRichStyles(BaseColor(), stylebits); }
+
+    void ClearRichStyleBits() {
+        for (auto &rich : richstyles) rich.flags &= ~RICH_STYLE_BITS;
+        NormalizeRichStyles();
+    }
+
+    void ClearRichColors() {
+        for (auto &rich : richstyles) rich.flags &= ~RICH_STYLE_COLOR;
+        NormalizeRichStyles();
+    }
+
+    void ToggleBaseStyleBit(int stylebit) {
+        stylebits ^= stylebit;
+        for (auto &rich : richstyles)
+            if (rich.HasStyleBits()) rich.stylebits ^= stylebit;
+        NormalizeRichStyles();
+        WasEdited();
+    }
+
+    void ApplyRichStyleRange(int start, int end, uint basecolor, int basestylebits,
+                             const std::function<void(RichStyle &, int)> &apply) {
+        auto len = TextLength();
+        start = max(0, min(start, len));
+        end = max(0, min(end, len));
+        if (start > end) std::swap(start, end);
+        if (start == end) return;
+
+        vector<int> points {0, len, start, end};
+        for (auto &rich : richstyles) {
+            points.push_back(max(0, min(rich.start, len)));
+            points.push_back(max(0, min(rich.end, len)));
+        }
+        std::sort(points.begin(), points.end());
+        points.erase(std::unique(points.begin(), points.end()), points.end());
+
+        vector<RichStyle> applied;
+        applied.reserve(points.size());
+        for (auto i = 0; i + 1 < static_cast<int>(points.size()); i++) {
+            auto a = points[i];
+            auto b = points[i + 1];
+            if (a == b) continue;
+
+            auto rich = RichStyleAt(a, basecolor, basestylebits);
+            rich.start = a;
+            rich.end = b;
+
+            if (a >= start && b <= end) apply(rich, a);
+            if (rich.HasAny()) applied.push_back(rich);
+        }
+        richstyles = std::move(applied);
+        NormalizeRichStyles(basecolor, basestylebits);
+        WasEdited();
+    }
+
+    bool StyleBitSetForWholeRange(int start, int end, int stylebit, int basestylebits) const {
+        auto len = TextLength();
+        start = max(0, min(start, len));
+        end = max(0, min(end, len));
+        if (start > end) std::swap(start, end);
+        if (start == end) return false;
+        for (auto pos = start; pos < end;) {
+            if (!(StyleBitsAt(pos, basestylebits) & stylebit)) return false;
+            auto next = end;
+            for (auto &rich : richstyles) {
+                if (rich.end <= pos) continue;
+                if (rich.start > pos) {
+                    next = min(next, rich.start);
+                    break;
+                }
+                next = min(next, rich.end);
+                break;
+            }
+            pos = max(pos + 1, next);
+        }
+        return true;
+    }
+
+    void SelectionRange(const Selection &s, int &start, int &end) const {
+        start = max(0, min(s.cursor, TextLength()));
+        end = max(0, min(s.cursorend, TextLength()));
+        if (start > end) std::swap(start, end);
+    }
+
+    bool HasSelectionRange(const Selection &s) const {
+        int start, end;
+        SelectionRange(s, start, end);
+        return start < end;
+    }
+
+    void ToggleRichStyle(const Selection &s, int stylebit, uint basecolor, int basestylebits) {
+        int start, end;
+        SelectionRange(s, start, end);
+        auto remove = StyleBitSetForWholeRange(start, end, stylebit, basestylebits);
+        ApplyRichStyleRange(start, end, basecolor, basestylebits,
+                            [&](RichStyle &rich, int) {
+                                rich.flags |= RICH_STYLE_BITS;
+                                rich.stylebits = remove ? rich.stylebits & ~stylebit
+                                                        : rich.stylebits | stylebit;
+                            });
+    }
+
+    void SetRichColor(const Selection &s, uint color, uint basecolor, int basestylebits) {
+        int start, end;
+        SelectionRange(s, start, end);
+        ApplyRichStyleRange(start, end, basecolor, basestylebits,
+                            [&](RichStyle &rich, int) {
+                                rich.flags |= RICH_STYLE_COLOR;
+                                rich.color = color;
+                            });
+    }
+
+    void SetRichStyleBits(const Selection &s, int newstylebits, uint basecolor,
+                          int basestylebits) {
+        int start, end;
+        SelectionRange(s, start, end);
+        ApplyRichStyleRange(start, end, basecolor, basestylebits,
+                            [&](RichStyle &rich, int) {
+                                rich.flags |= RICH_STYLE_BITS;
+                                rich.stylebits = newstylebits;
+                            });
+    }
+
+    void ShiftRichStylesForInsert(int pos, int inserted) {
+        if (inserted <= 0) return;
+        auto len = TextLength();
+        pos = max(0, min(pos, len));
+        for (auto &rich : richstyles) {
+            if (rich.start >= pos) {
+                rich.start += inserted;
+                rich.end += inserted;
+            } else if (rich.end > pos) {
+                rich.end += inserted;
+            }
+        }
+        NormalizeRichStyles();
+    }
+
+    void RemoveRichStyleRange(int start, int end) {
+        auto len = TextLength();
+        start = max(0, min(start, len));
+        end = max(0, min(end, len));
+        if (start > end) std::swap(start, end);
+        auto removed = end - start;
+        if (removed <= 0) return;
+
+        vector<RichStyle> adjusted;
+        adjusted.reserve(richstyles.size());
+        for (auto rich : richstyles) {
+            if (rich.end <= start) {
+                adjusted.push_back(rich);
+            } else if (rich.start >= end) {
+                rich.start -= removed;
+                rich.end -= removed;
+                adjusted.push_back(rich);
+            } else {
+                if (rich.start < start) {
+                    auto left = rich;
+                    left.end = start;
+                    adjusted.push_back(left);
+                }
+                if (rich.end > end) {
+                    auto right = rich;
+                    right.start = start;
+                    right.end = rich.end - removed;
+                    adjusted.push_back(right);
+                }
+            }
+        }
+        richstyles = std::move(adjusted);
+        NormalizeRichStyles();
+    }
+
     wxString htmlify(wxString &str) {
         wxString r;
         for (auto cref : str) {
@@ -113,10 +367,62 @@ struct Text {
         return r;
     }
 
+    wxString HTMLStyleForRichStyle(const RichStyle &rich) {
+        wxString style;
+        if (rich.HasColor()) style += wxString::Format("color:#%06X;", SwapColor(rich.color));
+        if (rich.HasStyleBits()) {
+            style += rich.stylebits & STYLE_BOLD ? "font-weight:bold;" : "font-weight:normal;";
+            style += rich.stylebits & STYLE_ITALIC ? "font-style:italic;" : "font-style:normal;";
+            if (rich.stylebits & (STYLE_UNDERLINE | STYLE_STRIKETHRU)) {
+                style += "text-decoration:";
+                if (rich.stylebits & STYLE_UNDERLINE) style += " underline";
+                if (rich.stylebits & STYLE_STRIKETHRU) style += " line-through";
+                style += ";";
+            } else {
+                style += "text-decoration:none;";
+            }
+            style += "font-family:'";
+            style += rich.stylebits & STYLE_FIXED ? sys->defaultfixedfont + "', monospace;"
+                                                  : sys->defaultfont + "', sans-serif;";
+        }
+        return style;
+    }
+
+    wxString RichTextToHTML(int start, int end) {
+        start = max(0, min(start, TextLength()));
+        end = max(0, min(end, TextLength()));
+        if (start > end) std::swap(start, end);
+        wxString out;
+        for (auto pos = start; pos < end;) {
+            auto next = min(end, NextRichBoundary(pos, end));
+            auto rich = RichStyleAt(pos, BaseColor(), stylebits);
+            wxString piece = t.Mid(pos, next - pos);
+            piece = htmlify(piece);
+            if (rich.HasAny()) {
+                auto style = HTMLStyleForRichStyle(rich);
+                out += "<span style=\"" + style + "\">" + piece + "</span>";
+            } else {
+                out += piece;
+            }
+            pos = next;
+        }
+        return out;
+    }
+
     wxString ToText(int indent, const Selection &s, int format) {
-        wxString str = s.cursor != s.cursorend ? t.Mid(s.cursor, s.cursorend - s.cursor) : t;
-        if (format == A_EXPXML || format == A_EXPHTMLT || format == A_EXPHTMLTI ||
-            format == A_EXPHTMLTE || format == A_EXPHTMLO || format == A_EXPHTMLB)
+        int start = 0;
+        int end = TextLength();
+        if (s.cursor != s.cursorend) {
+            start = min(s.cursor, s.cursorend);
+            end = max(s.cursor, s.cursorend);
+        }
+        wxString str = t.Mid(start, end - start);
+        if ((format == A_EXPHTMLT || format == A_EXPHTMLTI || format == A_EXPHTMLTE ||
+             format == A_EXPHTMLO || format == A_EXPHTMLB) &&
+            !richstyles.empty())
+            str = RichTextToHTML(start, end);
+        else if (format == A_EXPXML || format == A_EXPHTMLT || format == A_EXPHTMLTI ||
+                 format == A_EXPHTMLTE || format == A_EXPHTMLO || format == A_EXPHTMLB)
             str = htmlify(str);
         if (format == A_EXPHTMLTI && image)
             str.Prepend("<img src=\"data:" + imagetypes.at(image->type).second + ";base64," +
@@ -361,6 +667,78 @@ struct Text {
         return display.clusterboundaries.back();
     }
 
+    int NextRichBoundary(int pos, int limit) const {
+        auto next = limit;
+        for (auto &rich : richstyles) {
+            if (rich.end <= pos) continue;
+            if (rich.start > pos) next = min(next, rich.start);
+            else next = min(next, rich.end);
+            break;
+        }
+        return max(pos + 1, next);
+    }
+
+    int DisplayOffsetForSource(const DisplayLine &display, int sourcechars) const {
+        sourcechars =
+            max(0, min(sourcechars, static_cast<int>(display.sourceendtodisplayend.size()) - 1));
+        return display.sourceendtodisplayend[sourcechars];
+    }
+
+    int StyledDisplayRangeWidth(Document *doc, auto &dc, const DisplayLine &display, int line_start,
+                                int source_start, int source_end) const {
+        if (!doc || richstyles.empty()) {
+            return DisplayIndexWidth(dc, display, DisplayOffsetForSource(display, source_end)) -
+                   DisplayIndexWidth(dc, display, DisplayOffsetForSource(display, source_start));
+        }
+
+        source_start =
+            max(0, min(source_start, static_cast<int>(display.sourceendtodisplayend.size()) - 1));
+        source_end =
+            max(source_start,
+                min(source_end, static_cast<int>(display.sourceendtodisplayend.size()) - 1));
+        auto width = 0;
+        for (auto pos = source_start; pos < source_end;) {
+            auto abspos = line_start + pos;
+            auto next = min(source_end,
+                            NextRichBoundary(abspos, line_start + source_end) - line_start);
+            auto display_start = DisplayOffsetForSource(display, pos);
+            auto display_end = DisplayOffsetForSource(display, next);
+            if (display_start != display_end) {
+                doc->PickFont(dc, cell->Depth() - doc->drawpath.size(), relsize,
+                              StyleBitsAt(abspos, stylebits));
+                width += DisplayIndexWidth(dc, display, display_end) -
+                         DisplayIndexWidth(dc, display, display_start);
+            }
+            pos = next;
+        }
+        return width;
+    }
+
+    int StyledDisplayPrefixWidth(Document *doc, auto &dc, const DisplayLine &display,
+                                 int line_start, int sourcechars) const {
+        sourcechars =
+            max(0, min(sourcechars, static_cast<int>(display.sourceendtodisplayend.size()) - 1));
+        if (!IsClusterBoundary(display.clusterboundaries, sourcechars))
+            sourcechars = PreviousClusterBoundary(display.clusterboundaries, sourcechars);
+        return StyledDisplayRangeWidth(doc, dc, display, line_start, 0, sourcechars);
+    }
+
+    int StyledSourceCursorFromDisplayX(Document *doc, auto &dc, const DisplayLine &display,
+                                       int line_start, int xlimit) const {
+        if (xlimit <= 0) return 0;
+        auto beforex = 0;
+        for (auto i = 1; i < static_cast<int>(display.clusterboundaries.size()); i++) {
+            auto afterpos = display.clusterboundaries[i];
+            auto beforepos = display.clusterboundaries[i - 1];
+            auto afterx = StyledDisplayPrefixWidth(doc, dc, display, line_start, afterpos);
+            if (afterx >= xlimit) {
+                return xlimit - beforex < afterx - xlimit ? beforepos : afterpos;
+            }
+            beforex = afterx;
+        }
+        return display.clusterboundaries.back();
+    }
+
     static int PreviousCursorPos(const wxString &source, int pos) {
         auto boundaries = ClusterBoundaries(source);
         pos = max(0, min(pos, static_cast<int>(source.Len())));
@@ -484,7 +862,8 @@ struct Text {
         // return GetLinePart(i, l, l);     // big word was the last one
     }
 
-    void TextSize(wxReadOnlyDC &dc, int &sx, int &sy, int tiny, int &leftoffset, int maxcolwidth) {
+    void TextSize(Document *doc, wxReadOnlyDC &dc, int &sx, int &sy, int tiny, int &leftoffset,
+                  int maxcolwidth, int depth) {
         sx = sy = 0;
         auto i = 0;
         for (;;) {
@@ -499,8 +878,15 @@ struct Text {
             } else if (display.text.empty()) {
                 x = 0;
                 y = dc.GetCharHeight();
-            } else
+            } else if (richstyles.empty()) {
                 dc.GetTextExtent(display.text, &x, &y);
+            } else {
+                x = StyledDisplayRangeWidth(doc, dc, display, line.start, 0,
+                                            static_cast<int>(display.sourceendtodisplayend.size()) -
+                                                1);
+                y = dc.GetCharHeight();
+                doc->PickFont(dc, depth, relsize, stylebits);
+            }
             sx = max(x, sx);
             sy += y;
             leftoffset = y;
@@ -512,6 +898,29 @@ struct Text {
         return sys->searchstring.Len() &&
                (sys->casesensitivesearch ? t.Find(sys->searchstring)
                                          : t.Lower().Find(sys->searchstring)) >= 0;
+    }
+
+    void DrawStyledTextLine(Document *doc, wxDC &dc, const DisplayLine &display, int line_start,
+                            int tx, int ty, uint basecolor) {
+        auto line_len = static_cast<int>(display.sourceendtodisplayend.size()) - 1;
+        for (auto pos = 0; pos < line_len;) {
+            auto abspos = line_start + pos;
+            auto next = min(line_len, NextRichBoundary(abspos, line_start + line_len) - line_start);
+            auto display_start = DisplayOffsetForSource(display, pos);
+            auto display_end = DisplayOffsetForSource(display, next);
+            if (display_start != display_end) {
+                doc->PickFont(dc, cell->Depth() - doc->drawpath.size(), relsize,
+                              StyleBitsAt(abspos, stylebits));
+                dc.SetTextForeground(LightColor(ColorAt(abspos, basecolor)));
+                auto segment = display.text.Mid(display_start, display_end - display_start);
+                dc.DrawText(segment, tx, ty);
+                int width = 0;
+                dc.GetTextExtent(segment, &width, nullptr);
+                tx += width;
+            }
+            pos = next;
+        }
+        doc->PickFont(dc, cell->Depth() - doc->drawpath.size(), relsize, stylebits);
     }
 
     int Render(Document *doc, int bx, int by, int depth, wxDC &dc, int &leftoffset,
@@ -576,14 +985,20 @@ struct Text {
                     dc.SetTextForeground(*wxRED);
                 else if (filtered)
                     dc.SetTextForeground(*wxLIGHT_GREY);
-                else if (istag)
+                else if (istag && richstyles.empty())
                     dc.SetTextForeground(LightColor(doc->tags[t]));
-                else if (cell->textcolor)
+                else if (cell->textcolor && richstyles.empty())
                     dc.SetTextForeground(LightColor(cell->textcolor));  // FIXME: clean up
                 auto tx = bx + 2 + ixs;
                 auto ty = by + lines * h;
-                dc.DrawText(display.text, tx + g_margin_extra, ty + g_margin_extra);
-                if (searchfound || filtered || istag || cell->textcolor)
+                if (richstyles.empty() || searchfound || filtered) {
+                    dc.DrawText(display.text, tx + g_margin_extra, ty + g_margin_extra);
+                } else {
+                    auto basecolor = istag ? doc->tags[t] : cell->textcolor;
+                    DrawStyledTextLine(doc, dc, display, line.start, tx + g_margin_extra,
+                                       ty + g_margin_extra, basecolor);
+                }
+                if (searchfound || filtered || istag || cell->textcolor || !richstyles.empty())
                     dc.SetTextForeground(LightColor(0x000000));
             }
             lines++;
@@ -619,7 +1034,8 @@ struct Text {
         }
 
         auto display = BuildDisplayLine(ls);
-        s.cursor = s.cursorend = linestart + SourceCursorFromDisplayX(dc, display, bx - ixs - 2);
+        s.cursor = s.cursorend =
+            linestart + StyledSourceCursorFromDisplayX(doc, dc, display, linestart, bx - ixs - 2);
         ASSERT(s.cursor >= 0 && s.cursor <= static_cast<int>(t.Len()));
     }
 
@@ -641,8 +1057,10 @@ struct Text {
 
                 if (s.cursor != s.cursorend) {
                     if (s.cursor <= end && s.cursorend >= start) {
-                        auto x2 = DisplayPrefixWidth(dc, display, min(s.cursorend, end) - start);
-                        auto x1 = DisplayPrefixWidth(dc, display, max(s.cursor, start) - start);
+                        auto x2 = StyledDisplayPrefixWidth(doc, dc, display, start,
+                                                           min(s.cursorend, end) - start);
+                        auto x1 = StyledDisplayPrefixWidth(doc, dc, display, start,
+                                                           max(s.cursor, start) - start);
                         if (x1 != x2) {
                             int startx = cell->GetX(doc) + x1 + 2 + ixs + g_margin_extra;
                             int starty =
@@ -652,7 +1070,7 @@ struct Text {
                         }
                     }
                 } else if (s.cursor >= start && s.cursor <= end) {
-                    auto x = DisplayPrefixWidth(dc, display, s.cursor - start);
+                    auto x = StyledDisplayPrefixWidth(doc, dc, display, start, s.cursor - start);
                     int startx = cell->GetX(doc) + x + 1 + ixs + g_margin_extra;
                     int starty = cell->GetY(doc) + l * h + 1 + cell->ycenteroff + g_margin_extra;
                     DrawRectangle(dc, color, startx, starty, 2, h - 2);
@@ -684,8 +1102,11 @@ struct Text {
     bool RangeSelRemove(Selection &s) {
         WasEdited();
         if (s.cursor != s.cursorend) {
-            t.Remove(s.cursor, s.cursorend - s.cursor);
-            s.cursorend = s.cursor;
+            auto start = min(s.cursor, s.cursorend);
+            auto end = max(s.cursor, s.cursorend);
+            RemoveRichStyleRange(start, end);
+            t.Remove(start, end - start);
+            s.cursor = s.cursorend = start;
             return true;
         }
         return false;
@@ -711,6 +1132,7 @@ struct Text {
         RangeSelRemove(s);
         if (!prevl && !keeprelsize) SetRelSize(s);
         t.insert(s.cursor, ins);
+        ShiftRichStylesForInsert(s.cursor, static_cast<int>(ins.Len()));
         s.cursor = s.cursorend = s.cursor + static_cast<int>(ins.Len());
     }
     void Key(Document *doc, int k, Selection &s) {
@@ -728,6 +1150,7 @@ struct Text {
         if (!RangeSelRemove(s))
             if (s.cursor < static_cast<int>(t.Len())) {
                 auto next = NextCursorPos(s.cursor);
+                RemoveRichStyleRange(s.cursor, next);
                 t.Remove(s.cursor, next - s.cursor);
             };
     }
@@ -735,6 +1158,7 @@ struct Text {
         if (!RangeSelRemove(s))
             if (s.cursor > 0) {
                 auto prev = PreviousCursorPos(s.cursor);
+                RemoveRichStyleRange(prev, s.cursor);
                 t.Remove(prev, s.cursor - prev);
                 s.cursor = s.cursorend = prev;
             };
@@ -753,8 +1177,10 @@ struct Text {
             for (auto i = 0, j = 0; (j = t.Mid(i).Find(sys->searchstring)) >= 0;) {
                 // does this need WasEdited()?
                 i += j;
+                RemoveRichStyleRange(i, i + sys->searchstring.Len());
                 t.Remove(i, sys->searchstring.Len());
                 t.insert(i, str);
+                ShiftRichStylesForInsert(i, static_cast<int>(str.Len()));
                 i += str.Len();
             }
         } else {
@@ -762,10 +1188,12 @@ struct Text {
             for (auto i = 0, j = 0; (j = lowert.Mid(i).Find(sys->searchstring)) >= 0;) {
                 // does this need WasEdited()?
                 i += j;
+                RemoveRichStyleRange(i, i + sys->searchstring.Len());
                 lowert.Remove(i, sys->searchstring.Len());
                 t.Remove(i, sys->searchstring.Len());
                 lowert.insert(i, lstr);
                 t.insert(i, str);
+                ShiftRichStylesForInsert(i, static_cast<int>(str.Len()));
                 i += str.Len();
             }
         }
@@ -773,6 +1201,7 @@ struct Text {
 
     void Clear(Document *doc, Selection &s) {
         t.Clear();
+        richstyles.clear();
         s.EnterEdit(doc);
     }
 
@@ -800,10 +1229,19 @@ struct Text {
         dos.Write32(stylebits);
         wxLongLong le = lastedit.GetValue();
         dos.Write64(&le, 1);
+        dos.Write32(static_cast<wxUint32>(richstyles.size()));
+        for (auto &rich : richstyles) {
+            dos.Write32(rich.start);
+            dos.Write32(rich.end);
+            dos.Write32(rich.color);
+            dos.Write32(rich.stylebits);
+            dos.Write8(rich.flags);
+        }
     }
 
     void Load(wxDataInputStream &dis) {
         t = dis.ReadString();
+        richstyles.clear();
 
         // if (t.length() > 10000)
         //    printf("");
@@ -826,6 +1264,21 @@ struct Text {
             time = sys->fakelasteditonload--;
         }
         lastedit = wxDateTime(time);
+
+        if (sys->versionlastloaded >= 30) {
+            auto count = dis.Read32();
+            richstyles.reserve(count);
+            loop(i, count) {
+                RichStyle rich;
+                rich.start = dis.Read32();
+                rich.end = dis.Read32();
+                rich.color = dis.Read32() & 0xFFFFFF;
+                rich.stylebits = dis.Read32();
+                rich.flags = dis.Read8();
+                richstyles.push_back(rich);
+            }
+            NormalizeRichStyles();
+        }
     }
 
     auto Eval(auto &ev) const {

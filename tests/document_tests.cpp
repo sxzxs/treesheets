@@ -281,6 +281,24 @@ void TestPasteSingleTextReplacesCellAndEntersTextEdit() {
     CHECK(doc.modified);
 }
 
+void TestTextEditFormattingAppliesToSelectedTextRangeOnly() {
+    treesheets::Document doc;
+    InitDocument(doc, MakeRoot(1, 1));
+    auto cell = doc.selected.GetCell();
+    cell->text.t = "abcdef";
+    doc.selected.EnterEdit(&doc, 1, 4);
+
+    CHECK_EQ(doc.Action(wxID_BOLD), wxString(""));
+    CHECK_EQ(cell->text.stylebits, 0);
+    CHECK(cell->text.StyleBitsAt(0, cell->text.stylebits) == 0);
+    CHECK(cell->text.StyleBitsAt(2, cell->text.stylebits) & STYLE_BOLD);
+
+    doc.ColorChange(A_TEXTCOLOR, 23);
+    CHECK_EQ(cell->textcolor, g_textcolor_default);
+    CHECK_EQ(cell->text.ColorAt(0, cell->textcolor), g_textcolor_default);
+    CHECK_EQ(cell->text.ColorAt(2, cell->textcolor), 0xFF0000u);
+}
+
 void TestBackspaceDeleteAndWordEditingActions() {
     treesheets::Document doc;
     InitDocument(doc, MakeRoot(2, 2));
@@ -925,6 +943,7 @@ int main() {
     RUN_DOCUMENT_TEST(TestCrossDocumentCopyCutPasteUsesStoredCellClone);
     RUN_DOCUMENT_TEST(TestDragMoveAndCopyCellsWithoutCanvas);
     RUN_DOCUMENT_TEST(TestPasteSingleTextReplacesCellAndEntersTextEdit);
+    RUN_DOCUMENT_TEST(TestTextEditFormattingAppliesToSelectedTextRangeOnly);
     RUN_DOCUMENT_TEST(TestBackspaceDeleteAndWordEditingActions);
     RUN_DOCUMENT_TEST(TestKeyboardNavigationSelectionAndTextRanges);
     RUN_DOCUMENT_TEST(TestPasteTextEditNormalizesLineEndings);
