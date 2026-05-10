@@ -28,7 +28,7 @@ struct Document {
     int fgutter {6};
     int lasttextsize;
     int laststylebits;
-    Cell *currentdrawroot;  // for use during Render() calls
+    Cell *currentdrawroot {nullptr};  // for use during Render() calls
     vector<unique_ptr<UndoItem>> undolist;
     vector<unique_ptr<UndoItem>> redolist;
     vector<Selection> drawpath;
@@ -117,6 +117,7 @@ struct Document {
 
     void InitWith(unique_ptr<Cell> root, const wxString &filename, Cell *initialselected, int xsize, int ysize) {
         this->root = std::move(root);
+        currentdrawroot = this->root.get();
         InitCellSelect(initialselected, xsize, ysize);
         ChangeFileName(filename, false);
     }
@@ -137,6 +138,7 @@ struct Document {
     }
 
     wxString SaveDB(bool *success, bool istempfile = false, int page = -1) {
+        if (success) *success = false;
         if (filename.empty()) return _("Save cancelled.");
         Cell *ocs = nullptr;
         if (selected.xs != 0 || selected.ys != 0)
@@ -153,7 +155,7 @@ struct Document {
             wxBusyCursor wait;
             wxFFileOutputStream fos(savefilename);
             if (!fos.IsOk()) {
-                if (!istempfile)
+                if (!istempfile && sys->frame)
                     wxMessageBox(
                         _("Error writing TreeSheets file! (try saving under new filename)."),
                         savefilename.wx_str(), wxOK, sys->frame);
@@ -265,6 +267,7 @@ struct Document {
 
     void ScrollOrZoom(bool zoomiftiny = false) {
         if (!selected.grid) return;
+        if (!canvas) return;
         auto drawroot = WalkPath(drawpath);
         // If we jumped to a cell which may be insided a folded cell, we have to unfold it
         // because the rest of the code doesn't deal with a selection that is invisible :)
@@ -322,8 +325,10 @@ struct Document {
             }
             hover = targetcell_parent ? targetcell_parent->grid->FindCell(targetcell) : Selection();
             SetSelect(hover);
-            wxInfoDC dc(canvas);
-            Layout(dc);
+            if (canvas) {
+                wxInfoDC dc(canvas);
+                Layout(dc);
+            }
         }
     }
 
@@ -500,7 +505,7 @@ struct Document {
             selected.grid->ResetChildren();
             selected.grid->RelSize(-dir, selected, pathscalebias);
             paintscrolltoselection = true;
-            canvas->Refresh();
+            if (canvas) canvas->Refresh();
             return dir > 0 ? _("Text size increased.") : _("Text size decreased.");
         } else if (ctrl) {
             int steps = abs(dir);
@@ -840,8 +845,12 @@ struct Document {
                                   // trigger from there?
                     return Action(A_CANCELEDIT);
                 #ifdef WIN32  // works fine on Linux, not sure OS X
-                case WXK_PAGEDOWN: canvas->CursorScroll(0, g_scrollratecursor); return wxEmptyString;
-                case WXK_PAGEUP: canvas->CursorScroll(0, -g_scrollratecursor); return wxEmptyString;
+                case WXK_PAGEDOWN:
+                    if (canvas) canvas->CursorScroll(0, g_scrollratecursor);
+                    return wxEmptyString;
+                case WXK_PAGEUP:
+                    if (canvas) canvas->CursorScroll(0, -g_scrollratecursor);
+                    return wxEmptyString;
                 #endif
                 #ifdef __WXGTK__
                 // Due to limitations within GTK, wxGTK does not support specific keycodes 
@@ -884,12 +893,12 @@ struct Document {
                     case WXK_PAGEUP:
                         if (ctrl) return Action(alt ? A_INCWIDTHNH : A_ZOOMIN);
                         if (shift) return Action(A_INCSIZE);
-                        if (!alt) canvas->CursorScroll(0, -g_scrollratecursor);
+                        if (!alt && canvas) canvas->CursorScroll(0, -g_scrollratecursor);
                         return wxEmptyString;
                     case WXK_PAGEDOWN:
                         if (ctrl) return Action(alt ? A_DECWIDTHNH : A_ZOOMOUT);
                         if (shift) return Action(A_DECSIZE);
-                        if (!alt) canvas->CursorScroll(0, g_scrollratecursor);
+                        if (!alt && canvas) canvas->CursorScroll(0, g_scrollratecursor);
                         return wxEmptyString;
                 #endif
             }
@@ -904,8 +913,10 @@ struct Document {
                                // keystroke undos within same cell
             c->text.Key(this, uk, selected);
             paintscrolltoselection = true;
-            canvas->Refresh();
-            canvas->Update();
+            if (canvas) {
+                canvas->Refresh();
+                canvas->Update();
+            }
             return wxEmptyString;
         }
         unprocessed = true;
@@ -1105,7 +1116,7 @@ struct Document {
                     }
                     // root->ResetChildren();
                     sys->frame->TabsReset();  // ResetChildren on all
-                    canvas->Refresh();
+                    if (canvas) canvas->Refresh();
                 }
                 return wxEmptyString;
             }
@@ -1159,7 +1170,7 @@ struct Document {
                         if (c->cellcolor == oldbg && (!c->parent || c->parent->cellcolor == color))
                             c->cellcolor = color;
                     }
-                    canvas->Refresh();
+                    if (canvas) canvas->Refresh();
                 }
                 return wxEmptyString;
             }
@@ -1167,7 +1178,7 @@ struct Document {
             case A_DEFCURCOL: {
                 if (auto color = PickColor(sys->frame, sys->cursorcolor); color != (uint)-1) {
                     sys->cfg->Write("cursorcolor", sys->cursorcolor = color);
-                    canvas->Refresh();
+                    if (canvas) canvas->Refresh();
                 }
                 return wxEmptyString;
             }
@@ -1193,7 +1204,7 @@ struct Document {
                                         ? sys->frame->filter->GetValue()
                                         : sys->frame->filter->GetValue().Lower();
                 auto message = SearchNext(false, false, false);
-                canvas->Refresh();
+                if (canvas) canvas->Refresh();
                 return message;
             }
 
@@ -1205,7 +1216,7 @@ struct Document {
             case A_ROUND5:
             case A_ROUND6:
                 sys->cfg->Write("roundness", long(sys->roundness = action - A_ROUND0));
-                canvas->Refresh();
+                if (canvas) canvas->Refresh();
                 return wxEmptyString;
 
             case A_OPENCELLCOLOR:
@@ -1349,7 +1360,7 @@ struct Document {
                     if (selected.cursorend == 0) return wxEmptyString;
                     cell->AddUndo(this);
                     cell->text.Backspace(selected);
-                    canvas->Refresh();
+                    if (canvas) canvas->Refresh();
                 } else {
                     selected.grid->MultiCellDelete(this, selected);
                     SetSelect(selected);
@@ -1369,7 +1380,7 @@ struct Document {
                     if (selected.cursor == cell->text.t.Len()) return wxEmptyString;
                     cell->AddUndo(this);
                     cell->text.Delete(selected);
-                    canvas->Refresh();
+                    if (canvas) canvas->Refresh();
                 } else {
                     selected.grid->MultiCellDelete(this, selected);
                     SetSelect(selected);
@@ -1382,7 +1393,7 @@ struct Document {
                     if (selected.cursor == cell->text.t.Len()) return wxEmptyString;
                     cell->AddUndo(this);
                     cell->text.DeleteWord(selected);
-                    canvas->Refresh();
+                    if (canvas) canvas->Refresh();
                 }
                 ZoomOutIfNoGrid();
                 return wxEmptyString;
@@ -1405,7 +1416,7 @@ struct Document {
                         cell->AddUndo(this);
                         cell->text.Backspace(selected);
                     }
-                    canvas->Refresh();
+                    if (canvas) canvas->Refresh();
                 }
                 ZoomOutIfNoGrid();
                 return wxEmptyString;
@@ -1487,8 +1498,8 @@ struct Document {
                         ext = gridmax - pos;
                     }
 
-                    sys->frame->UpdateStatus(selected, true);
-                    canvas->Refresh();
+                    if (sys->frame) sys->frame->UpdateStatus(selected, true);
+                    if (canvas) canvas->Refresh();
                 } else if (action == A_SCLEFT || action == A_SCRIGHT) {
                     selected.Cursor(this, action - A_SCUP + A_UP, true, true);
                 }
@@ -1561,7 +1572,7 @@ struct Document {
                 cell->AddGrid(size, size);
                 SetSelect(Selection(cell->grid, 0, 0, 1, 1));
                 paintscrolltoselection = true;
-                canvas->Refresh();
+                if (canvas) canvas->Refresh();
                 return wxEmptyString;
             }
 
@@ -1638,7 +1649,7 @@ struct Document {
                 selected.grid->cell->AddUndo(this);
                 selected.grid->SetStyles(selected, sys->cellclipboard.get());
                 selected.grid->cell->ResetChildren();
-                canvas->Refresh();
+                if (canvas) canvas->Refresh();
                 return wxEmptyString;
 
             case A_ENTERCELL:
@@ -1669,7 +1680,7 @@ struct Document {
                                      wxFD_OPEN | wxFD_FILE_MUST_EXIST | wxFD_CHANGE_DIR);
                 cell->AddUndo(this);
                 LoadImageIntoCell(filename, cell, sys->frame->FromDIP(1.0));
-                canvas->Refresh();
+                if (canvas) canvas->Refresh();
                 return wxEmptyString;
             }
 
@@ -1845,7 +1856,7 @@ struct Document {
                     c->grid->folded = action == A_FOLD ? !c->grid->folded : action == A_FOLDALL;
                     c->ResetChildren();
                 }
-                canvas->Refresh();
+                if (canvas) canvas->Refresh();
                 return wxEmptyString;
 
             case A_HOME:
@@ -2130,7 +2141,7 @@ struct Document {
                 if (LastUndoSameCellTextEdit(cell))
                     Undo(undolist, redolist);
                 else
-                    canvas->Refresh();
+                    if (canvas) canvas->Refresh();
                 selected.ExitEdit(this);
                 return wxEmptyString;
 
@@ -2138,7 +2149,7 @@ struct Document {
                 if (selected.cursorend == 0) return wxEmptyString;
                 cell->AddUndo(this);
                 cell->text.BackspaceWord(selected);
-                canvas->Refresh();
+                if (canvas) canvas->Refresh();
                 ZoomOutIfNoGrid();
                 return wxEmptyString;
 
@@ -2160,7 +2171,7 @@ struct Document {
                     case A_END: cell->text.HomeEnd(selected, false); break;
                 }
                 paintscrolltoselection = true;
-                canvas->Refresh();
+                if (canvas) canvas->Refresh();
                 return wxEmptyString;
             }
             default: return _("Internal error: unimplemented operation!");
@@ -2271,6 +2282,31 @@ struct Document {
              pos = FindFrom(lower, pattern, pos + 1)) {
             auto after = pos + static_cast<int>(pattern.Len());
             if (after >= len || !IsHTMLNameChar(lower[after])) return pos;
+        }
+        return wxNOT_FOUND;
+    }
+
+    static int FindMatchingHTMLTagClose(const wxString &html, const wxString &lower,
+                                        const wxString &tag, int openend, int limit = -1) {
+        auto len = static_cast<int>(lower.Len());
+        if (limit < 0 || limit > len) limit = len;
+        auto depth = 1;
+        for (auto pos = openend + 1; pos < limit;) {
+            auto nextopen = FindHTMLTag(lower, tag, pos, limit);
+            auto nextclose = FindHTMLTag(lower, tag, pos, limit, true);
+            if (nextclose == wxNOT_FOUND) return wxNOT_FOUND;
+            if (nextopen != wxNOT_FOUND && nextopen < nextclose) {
+                auto nextopenend = FindHTMLTagEnd(html, nextopen);
+                if (nextopenend == wxNOT_FOUND) return wxNOT_FOUND;
+                depth++;
+                pos = nextopenend + 1;
+            } else {
+                depth--;
+                if (!depth) return nextclose;
+                auto nextcloseend = FindHTMLTagEnd(html, nextclose);
+                if (nextcloseend == wxNOT_FOUND) return wxNOT_FOUND;
+                pos = nextcloseend + 1;
+            }
         }
         return wxNOT_FOUND;
     }
@@ -2751,6 +2787,13 @@ struct Document {
                 auto closing = IsHTMLClosingTag(tag);
                 if (!closing && name == "br")
                     AppendHTMLNewline(out, spacepending);
+                else if (!closing && name == "img") {
+                    wxString replacement;
+                    if (!HTMLAttributeValue(tag, "alt", replacement) &&
+                        !HTMLAttributeValue(tag, "title", replacement))
+                        HTMLAttributeValue(tag, "src", replacement);
+                    if (!replacement.IsEmpty()) AppendHTMLText(out, replacement, spacepending);
+                }
                 else if (closing && (name == "p" || name == "div" || name == "li"))
                     AppendHTMLNewline(out, spacepending);
                 i = end + 1;
@@ -2794,7 +2837,7 @@ struct Document {
         if (table == wxNOT_FOUND) return false;
         auto tableopenend = FindHTMLTagEnd(html, table);
         if (tableopenend == wxNOT_FOUND) return false;
-        auto tableend = FindHTMLTag(lower, "table", tableopenend + 1, -1, true);
+        auto tableend = FindMatchingHTMLTagClose(html, lower, "table", tableopenend);
         if (tableend == wxNOT_FOUND) tableend = static_cast<int>(html.Len());
 
         for (auto pos = tableopenend + 1;;) {
@@ -2802,7 +2845,7 @@ struct Document {
             if (rowstart == wxNOT_FOUND) break;
             auto rowopenend = FindHTMLTagEnd(html, rowstart);
             if (rowopenend == wxNOT_FOUND) break;
-            auto rowclose = FindHTMLTag(lower, "tr", rowopenend + 1, tableend, true);
+            auto rowclose = FindMatchingHTMLTagClose(html, lower, "tr", rowopenend, tableend);
             int rowlimit = 0;
             int nextpos = 0;
             if (rowclose == wxNOT_FOUND) {
@@ -2823,7 +2866,8 @@ struct Document {
                 auto cellopenend = FindHTMLTagEnd(html, cellstart);
                 if (cellopenend == wxNOT_FOUND || cellopenend >= rowlimit) break;
                 auto starttag = html.Mid(cellstart, cellopenend - cellstart + 1);
-                auto cellclose = FindHTMLTag(lower, celltag, cellopenend + 1, rowlimit, true);
+                auto cellclose =
+                    FindMatchingHTMLTagClose(html, lower, celltag, cellopenend, rowlimit);
                 int contentend = 0;
                 if (cellclose == wxNOT_FOUND) {
                     wxString nextcelltag;
@@ -3032,7 +3076,7 @@ struct Document {
                 selected.grid->DeleteCells(dx, dy, nxs, nys);
                 v -= dec;
             }
-            canvas->Refresh();
+            if (canvas) canvas->Refresh();
         }
     }
 
@@ -3114,10 +3158,12 @@ struct Document {
                        ? true
                        : false;
         }
-        if (selected.grid)
-            ScrollOrZoom();
-        else
-            canvas->Refresh();
+        if (canvas) {
+            if (selected.grid)
+                ScrollOrZoom();
+            else
+                canvas->Refresh();
+        }
         UpdateFileName();
     }
 

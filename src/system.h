@@ -180,9 +180,201 @@ struct System {
         return fn.GetPathWithSep() + fn.GetName() + ext;
     }
 
+    struct LoadedDB {
+        unique_ptr<Cell> root;
+        Cell *initialselected {nullptr};
+        int xsize {1};
+        int ysize {1};
+        int zoomlevel {0};
+        int numcells {0};
+        int textbytes {0};
+        bool anyimagesfailed {false};
+        map<wxString, uint> tags;
+    };
+
+    bool ReadBytes(wxInputStream &input, void *buffer, size_t bytes) {
+        input.Read(buffer, bytes);
+        return input.LastRead() == bytes;
+    }
+
+    wxString ReadDB(const wxString &filename, LoadedDB &loaded) {
+        Cell *ics = nullptr;
+        wxFFileInputStream fis(filename);
+        wxDataInputStream dis(fis);
+        if (!fis.IsOk()) return _("Cannot open file.");
+
+        char buf[4];
+        if (!ReadBytes(fis, buf, 4)) return _("Not a TreeSheets file.");
+        if (strncmp(buf, "TSFF", 4)) return _("Not a TreeSheets file.");
+        if (!ReadBytes(fis, &versionlastloaded, 1)) return _("File corrupted!");
+        if (versionlastloaded > TS_VERSION) return _("File of newer version.");
+        if (versionlastloaded >= 21) {
+            uchar size = 0;
+            if (!ReadBytes(fis, &size, 1)) return _("File corrupted!");
+            loaded.xsize = size;
+            if (!ReadBytes(fis, &size, 1)) return _("File corrupted!");
+            loaded.ysize = size;
+        }
+        if (versionlastloaded >= 23) {
+            uchar zoom = 0;
+            if (!ReadBytes(fis, &zoom, 1)) return _("File corrupted!");
+            loaded.zoomlevel = zoom;
+        }
+        fakelasteditonload = wxDateTime::Now().GetValue();
+
+        loadimageids.clear();
+
+        for (;;) {
+            if (!ReadBytes(fis, buf, 1)) return _("Corrupt block header.");
+            switch (*buf) {
+                case 'I':
+                case 'J': {
+                    char iti = *buf;
+                    if (!imagetypes.contains(iti))
+                        return _("Found an image type that is not defined in this program.");
+                    if (versionlastloaded < 9) dis.ReadString();
+                    auto sc = versionlastloaded >= 19 ? dis.ReadDouble() : 1.0;
+                    if (!std::isfinite(sc) || sc <= 0.0) return _("File corrupted!");
+                    vector<uint8_t> image_data;
+                    if (versionlastloaded >= 22) {
+                        auto imagelen64 = dis.Read64();
+                        auto image_start = fis.TellI();
+                        auto file_length = fis.GetLength();
+                        if (!fis.IsOk() || image_start < 0 || file_length < image_start)
+                            return _("File corrupted!");
+                        auto remaining = file_length - image_start;
+                        if (imagelen64 > static_cast<decltype(imagelen64)>(remaining) ||
+                            imagelen64 >
+                                static_cast<decltype(imagelen64)>(
+                                    (std::numeric_limits<size_t>::max)()))
+                            return _("File corrupted!");
+                        auto imagelen = static_cast<size_t>(imagelen64);
+                        image_data.resize(imagelen);
+                        if (!ReadBytes(fis, image_data.data(), imagelen))
+                            return _("File corrupted!");
+                    } else {
+                        off_t beforeimage = fis.TellI();
+
+                        if (iti == 'I') {
+                            uchar header[8];
+                            fis.Read(header, 8);
+                            uchar expected[] = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'};
+                            if (memcmp(header, expected, 8)) return _("Corrupt PNG header.");
+                            dis.BigEndianOrdered(true);
+                            for (;;) {  // Skip all chunks.
+                                wxInt32 len = dis.Read32();
+                                char fourcc[4];
+                                fis.Read(fourcc, 4);
+                                fis.SeekI(len, wxFromCurrent);  // skip data
+                                dis.Read32();                   // skip CRC
+                                if (memcmp(fourcc, "IEND", 4) == 0) break;
+                            }
+                        } else if (iti == 'J') {
+                            wxImage im;
+                            im.LoadFile(fis);
+                            if (!im.IsOk()) { return _("JPEG file is corrupted!"); }
+                        }
+
+                        off_t afterimage = fis.TellI();
+                        fis.SeekI(beforeimage);
+                        auto sz = afterimage - beforeimage;
+                        image_data.resize(sz);
+                        fis.Read(image_data.data(), sz);
+                        fis.SeekI(afterimage);
+                    }
+                    if (!fis.IsOk()) image_data.clear();
+
+                    loadimageids.push_back(AddImageToList(sc, std::move(image_data), iti));
+                    break;
+                }
+
+                case 'D': {
+                    wxZlibInputStream zis(fis);
+                    if (!zis.IsOk()) return _("Cannot decompress file.");
+                    wxDataInputStream dis(zis);
+                    loaded.root.reset(
+                        Cell::LoadWhich(dis, nullptr, loaded.numcells, loaded.textbytes, ics));
+                    if (!loaded.root) return _("File corrupted!");
+                    loaded.initialselected = ics;
+                    if (loaded.zoomlevel > loaded.numcells) {
+                        loaded.root.reset();
+                        return _("File corrupted!");
+                    }
+                    if (loaded.initialselected && loaded.initialselected->parent &&
+                        loaded.initialselected->parent->grid) {
+                        auto grid = loaded.initialselected->parent->grid.get();
+                        auto selection = grid->FindCell(loaded.initialselected);
+                        if (selection.x + loaded.xsize > grid->xs ||
+                            selection.y + loaded.ysize > grid->ys) {
+                            loaded.root.reset();
+                            return _("File corrupted!");
+                        }
+                    }
+
+                    if (versionlastloaded >= 11) {
+                        for (;;) {
+                            auto tag = dis.ReadString();
+                            if (!tag.Len()) break;
+                            loaded.tags[tag] =
+                                versionlastloaded >= 24 ? dis.Read32() : g_tagcolor_default;
+                        }
+                    }
+
+                    return wxEmptyString;
+                }
+
+                default: return _("Corrupt block header.");
+            }
+        }
+    }
+
+    void DisplayLoadedImages() {
+        ThreadPool pool(std::thread::hardware_concurrency());
+        for (const auto &image : imagelist) {
+            pool.enqueue(
+                [](auto img) {
+                    if (img->trefc) img->Display();
+                },
+                image.get());
+        }
+    }
+
+    wxString LoadDBIntoDocument(Document &doc, const wxString &filename, int *numcells = nullptr,
+                                int *textbytes = nullptr, int *zoomlevel = nullptr) {
+        LoadedDB loaded;
+        auto message = ReadDB(filename, loaded);
+        if (!message.IsEmpty()) return message;
+
+        doc.InitWith(std::move(loaded.root), filename, loaded.initialselected, loaded.xsize,
+                     loaded.ysize);
+        doc.tags = std::move(loaded.tags);
+        doc.RefreshImageRefCount(false);
+
+        if (numcells) *numcells = loaded.numcells;
+        if (textbytes) *textbytes = loaded.textbytes;
+        if (zoomlevel) *zoomlevel = loaded.zoomlevel;
+        FileUsed(filename, &doc);
+        return wxEmptyString;
+    }
+
+    bool DocumentChangedOnDisk(Document *doc, wxDateTime *modtime_out = nullptr) {
+        if (!doc || doc->filename.IsEmpty() || !wxFileExists(doc->filename)) return false;
+        auto modtime = wxFileName(doc->filename).GetModificationTime();
+        if (!modtime.IsValid()) return false;
+        if (!doc->lastmodificationtime.IsValid()) {
+            doc->lastmodificationtime = modtime;
+            return false;
+        }
+        if (modtime == doc->lastmodificationtime) return false;
+        if (modtime_out) *modtime_out = modtime;
+        return true;
+    }
+
     wxString LoadDB(const wxString &filename, bool fromreload = false, int insert_at = -1) {
         auto fn = filename;
         auto loadedfromtmp = false;
+
+        if (!frame) return _("Cannot load file without an application frame.");
 
         if (!fromreload) {
             if (frame->GetTabByFileName(filename))
@@ -198,145 +390,47 @@ struct System {
             }
         }
 
-        Document *doc = nullptr;
-        auto anyimagesfailed = false;
         auto start_loading_time = wxGetLocalTimeMillis();
-        int zoomlevel = 0;
+        LoadedDB loaded;
+        Document *doc = nullptr;
 
         {  // limit destructors
             wxBusyCursor wait;
-            Cell *ics = nullptr;
-            wxFFileInputStream fis(fn);
-            wxDataInputStream dis(fis);
-            if (!fis.IsOk()) {
-                for (int i = (int)frame->filehistory.GetCount() - 1; i >= 0; i--) {
-                    if (frame->filehistory.GetHistoryFile(i) == filename)
-                        frame->filehistory.RemoveFileFromHistory(i);
+            auto message = ReadDB(fn, loaded);
+            if (!message.IsEmpty()) {
+                if (message == _("Cannot open file.")) {
+                    for (int i = (int)frame->filehistory.GetCount() - 1; i >= 0; i--) {
+                        if (frame->filehistory.GetHistoryFile(i) == filename)
+                            frame->filehistory.RemoveFileFromHistory(i);
+                    }
                 }
-                return _("Cannot open file.");
+                return message;
             }
 
-            char buf[4];
-            fis.Read(buf, 4);
-            if (strncmp(buf, "TSFF", 4)) return _("Not a TreeSheets file.");
-            fis.Read(&versionlastloaded, 1);
-            if (versionlastloaded > TS_VERSION) return _("File of newer version.");
-            auto xs = versionlastloaded >= 21 ? dis.Read8() : 1;
-            auto ys = versionlastloaded >= 21 ? dis.Read8() : 1;
-            zoomlevel = versionlastloaded >= 23 ? dis.Read8() : 0;
-            fakelasteditonload = wxDateTime::Now().GetValue();
-
-            loadimageids.clear();
-
-            for (;;) {
-                fis.Read(buf, 1);
-                switch (*buf) {
-                    case 'I':
-                    case 'J': {
-                        char iti = *buf;
-                        if (!imagetypes.contains(iti))
-                            return _("Found an image type that is not defined in this program.");
-                        if (versionlastloaded < 9) dis.ReadString();
-                        auto sc = versionlastloaded >= 19 ? dis.ReadDouble() : 1.0;
-                        vector<uint8_t> image_data;
-                        if (versionlastloaded >= 22) {
-                            auto imagelen = (size_t)dis.Read64();
-                            image_data.resize(imagelen);
-                            fis.Read(image_data.data(), imagelen);
-                        } else {
-                            off_t beforeimage = fis.TellI();
-
-                            if (iti == 'I') {
-                                uchar header[8];
-                                fis.Read(header, 8);
-                                uchar expected[] = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'};
-                                if (memcmp(header, expected, 8)) return _("Corrupt PNG header.");
-                                dis.BigEndianOrdered(true);
-                                for (;;) {  // Skip all chunks.
-                                    wxInt32 len = dis.Read32();
-                                    char fourcc[4];
-                                    fis.Read(fourcc, 4);
-                                    fis.SeekI(len, wxFromCurrent);  // skip data
-                                    dis.Read32();                   // skip CRC
-                                    if (memcmp(fourcc, "IEND", 4) == 0) break;
-                                }
-                            } else if (iti == 'J') {
-                                wxImage im;
-                                im.LoadFile(fis);
-                                if (!im.IsOk()) { return _("JPEG file is corrupted!"); }
-                            }
-
-                            off_t afterimage = fis.TellI();
-                            fis.SeekI(beforeimage);
-                            auto sz = afterimage - beforeimage;
-                            image_data.resize(sz);
-                            fis.Read(image_data.data(), sz);
-                            fis.SeekI(afterimage);
-                        }
-                        if (!fis.IsOk()) image_data.clear();
-
-                        loadimageids.push_back(AddImageToList(sc, std::move(image_data), iti));
-                        break;
-                    }
-
-                    case 'D': {
-                        wxZlibInputStream zis(fis);
-                        if (!zis.IsOk()) return _("Cannot decompress file.");
-                        wxDataInputStream dis(zis);
-                        auto numcells = 0, textbytes = 0;
-                        unique_ptr<Cell> root(Cell::LoadWhich(dis, nullptr, numcells, textbytes, ics));
-                        if (!root) return _("File corrupted!");
-
-                        doc = NewTabDoc(true, insert_at);
-                        if (loadedfromtmp) {
-                            doc->undolistsizeatfullsave =
-                                -1;  // if not, user will lose tmp without warning when he closes
-                            doc->modified = true;
-                        }
-                        doc->InitWith(std::move(root), filename, ics, xs, ys);
-
-                        if (versionlastloaded >= 11) {
-                            for (;;) {
-                                auto tag = dis.ReadString();
-                                if (!tag.Len()) break;
-                                doc->tags[tag] =
-                                    versionlastloaded >= 24 ? dis.Read32() : g_tagcolor_default;
-                            }
-                        }
-
-                        auto end_loading_time = wxGetLocalTimeMillis();
-
-                        frame->SetStatus(wxString::Format(
-                            _("Loaded %s (%d cells, %d characters) in %lld milliseconds."),
-                            filename, numcells, textbytes, end_loading_time - start_loading_time));
-
-                        goto done;
-                    }
-
-                    default: return _("Corrupt block header.");
-                }
+            doc = NewTabDoc(true, insert_at);
+            if (loadedfromtmp) {
+                doc->undolistsizeatfullsave =
+                    -1;  // if not, user will lose tmp without warning when he closes
+                doc->modified = true;
             }
+            doc->InitWith(std::move(loaded.root), filename, loaded.initialselected, loaded.xsize,
+                          loaded.ysize);
+            doc->tags = std::move(loaded.tags);
+
+            auto end_loading_time = wxGetLocalTimeMillis();
+            frame->SetStatus(wxString::Format(
+                _("Loaded %s (%d cells, %d characters) in %lld milliseconds."), filename,
+                loaded.numcells, loaded.textbytes, end_loading_time - start_loading_time));
         }
 
-    done:
-
         doc->RefreshImageRefCount(false);
-        {
-            ThreadPool pool(std::thread::hardware_concurrency());
-            for (const auto &image : sys->imagelist) {
-                pool.enqueue(
-                    [](auto img) {
-                        if (img->trefc) img->Display();
-                    },
-                    image.get());
-            }
-        }  // wait until all tasks are finished
-
+        DisplayLoadedImages();
         FileUsed(filename, doc);
-        doc->Zoom(zoomlevel, true);
-        if (anyimagesfailed)
-            wxMessageBox(_("PNG decode failed on some images in this document\nThey have been replaced by red squares."),
-                         _("PNG decoder failure"), wxOK, frame);
+        doc->Zoom(loaded.zoomlevel, true);
+        if (loaded.anyimagesfailed)
+            wxMessageBox(
+                _("PNG decode failed on some images in this document\nThey have been replaced by red squares."),
+                _("PNG decoder failure"), wxOK, frame);
 
         return wxEmptyString;
     }

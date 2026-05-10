@@ -1,21 +1,8 @@
-#include <iostream>
-
-#include "../src/main.cpp"
+#include "test_helpers.h"
 
 namespace {
 
-int failures = 0;
-
-void Check(bool condition, const char *expression, const char *file, int line) {
-    if (condition) return;
-    failures++;
-    std::cerr << file << ":" << line << ": check failed: " << expression << '\n';
-}
-
-#define CHECK(expr) Check((expr), #expr, __FILE__, __LINE__)
-#define CHECK_EQ(actual, expected) Check(((actual) == (expected)), #actual " == " #expected, __FILE__, __LINE__)
-
-wxString Utf8(const char *text) { return wxString::FromUTF8(text); }
+using namespace test_helpers;
 
 void TestCombiningMarksStayWithBase() {
     using Text = treesheets::Text;
@@ -122,11 +109,5 @@ int main() {
     TestSoftWrapKeepsWordsTogether();
     TestBackspaceDeletesOneGraphemeCluster();
 
-    if (failures) {
-        std::cerr << failures << " test check(s) failed\n";
-        return 1;
-    }
-
-    std::cout << "text tests passed\n";
-    return 0;
+    return Finish("text tests passed");
 }

@@ -225,44 +225,35 @@ if(TREESHEETS_BUILD_TESTS)
     set(TREESHEETS_TEST_MAIN_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp"
         ${TREESHEETS_HEADER_FILES})
-    set_source_files_properties(
-        tests/text_tests.cpp
-        tests/grid_tests.cpp
-        tests/serialization_tests.cpp
-        PROPERTIES OBJECT_DEPENDS "${TREESHEETS_TEST_MAIN_DEPENDS}")
 
-    add_executable(TreeSheetsTextTests
-        tests/text_tests.cpp
-        src/stdafx.cpp)
-    target_compile_definitions(TreeSheetsTextTests PRIVATE
+    add_library(TreeSheetsTestSupport INTERFACE)
+    target_compile_definitions(TreeSheetsTestSupport INTERFACE
         "TREESHEETS_TESTING=1"
-        "PACKAGE_VERSION=\"test\"")
-    target_link_libraries(TreeSheetsTextTests PRIVATE wx::aui wx::adv wx::core wx::xml wx::net)
-    add_test(NAME TreeSheetsTextTests COMMAND TreeSheetsTextTests)
-    set_tests_properties(TreeSheetsTextTests PROPERTIES WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")
+        "PACKAGE_VERSION=\"test\""
+        "TREESHEETS_SOURCE_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}\"")
+    target_link_libraries(TreeSheetsTestSupport INTERFACE wx::aui wx::adv wx::core wx::xml wx::net)
 
-    add_executable(TreeSheetsGridTests
-        tests/grid_tests.cpp
-        src/stdafx.cpp)
-    target_compile_definitions(TreeSheetsGridTests PRIVATE
-        "TREESHEETS_TESTING=1"
-        "PACKAGE_VERSION=\"test\"")
-    target_link_libraries(TreeSheetsGridTests PRIVATE wx::aui wx::adv wx::core wx::xml wx::net)
-    add_test(NAME TreeSheetsGridTests COMMAND TreeSheetsGridTests)
-    set_tests_properties(TreeSheetsGridTests PROPERTIES WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")
+    function(add_treesheets_test target source)
+        set_source_files_properties(${source}
+            PROPERTIES OBJECT_DEPENDS "${TREESHEETS_TEST_MAIN_DEPENDS}")
+        add_executable(${target}
+            ${source}
+            src/stdafx.cpp)
+        target_link_libraries(${target} PRIVATE TreeSheetsTestSupport)
+        if(MSVC)
+            target_compile_options(${target} PRIVATE /utf-8)
+        endif()
+        add_test(NAME ${target} COMMAND ${target})
+        set_tests_properties(${target} PROPERTIES WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")
+    endfunction()
 
-    add_executable(TreeSheetsSerializationTests
-        tests/serialization_tests.cpp
-        src/stdafx.cpp)
-    target_compile_definitions(TreeSheetsSerializationTests PRIVATE
-        "TREESHEETS_TESTING=1"
-        "PACKAGE_VERSION=\"test\"")
-    target_link_libraries(TreeSheetsSerializationTests PRIVATE wx::aui wx::adv wx::core wx::xml wx::net)
-    add_test(NAME TreeSheetsSerializationTests COMMAND TreeSheetsSerializationTests)
-    set_tests_properties(TreeSheetsSerializationTests PROPERTIES WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")
+    add_treesheets_test(TreeSheetsTextTests tests/text_tests.cpp)
+    add_treesheets_test(TreeSheetsGridTests tests/grid_tests.cpp)
+    add_treesheets_test(TreeSheetsSerializationTests tests/serialization_tests.cpp)
+    add_treesheets_test(TreeSheetsDocumentTests tests/document_tests.cpp)
 
     add_custom_target(TreeSheetsTests
-        DEPENDS TreeSheetsTextTests TreeSheetsGridTests TreeSheetsSerializationTests)
+        DEPENDS TreeSheetsTextTests TreeSheetsGridTests TreeSheetsSerializationTests TreeSheetsDocumentTests)
 endif()
 
 ### Installation

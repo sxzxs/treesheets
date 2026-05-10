@@ -2046,14 +2046,8 @@ struct TSFrame : wxFrame {
     }
 
     bool ReloadDocumentIfChangedOnDisk(Document *doc, int page) {
-        if (!doc || doc->filename.IsEmpty() || !wxFileExists(doc->filename)) return false;
-        auto modtime = wxFileName(doc->filename).GetModificationTime();
-        if (!modtime.IsValid()) return false;
-        if (!doc->lastmodificationtime.IsValid()) {
-            doc->lastmodificationtime = modtime;
-            return false;
-        }
-        if (modtime == doc->lastmodificationtime) return false;
+        wxDateTime modtime;
+        if (!sys->DocumentChangedOnDisk(doc, &modtime)) return false;
         if (watcherwaitingforuser) return true;
 
         if (doc->modified) {

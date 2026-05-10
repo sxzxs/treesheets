@@ -1,8 +1,12 @@
 #pragma once
 
 #ifdef _WIN32
-    #define _CRT_SECURE_NO_WARNINGS
-    #define _SCL_SECURE_NO_WARNINGS
+    #ifndef _CRT_SECURE_NO_WARNINGS
+        #define _CRT_SECURE_NO_WARNINGS
+    #endif
+    #ifndef _SCL_SECURE_NO_WARNINGS
+        #define _SCL_SECURE_NO_WARNINGS
+    #endif
 #endif
 
 #include <ctype.h>
@@ -65,11 +69,13 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <clocale>
 #include <condition_variable>
 #include <filesystem>
 #include <functional>
 #include <future>
+#include <limits>
 #include <locale>
 #include <map>
 #include <memory>

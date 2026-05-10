@@ -43,7 +43,7 @@ class Selection {
         ::SetCursor((HCURSOR)c.GetHCURSOR());
         #endif
         // this doesn't change the cursor immediately, only on mousemove:
-        doc->canvas->SetCursor(c);
+        if (doc->canvas) doc->canvas->SetCursor(c);
 
         firstdx = firstdy = 0;
     }
@@ -134,7 +134,7 @@ class Selection {
             // thing.
             if (grid) grid->cell->ResetChildren();
             doc->paintscrolltoselection = true;
-            doc->canvas->Refresh();
+            if (doc->canvas) doc->canvas->Refresh();
         } else {
             if (ctrl && dx)  // implies textedit
             {
@@ -305,7 +305,7 @@ class Selection {
                 };
             }
             doc->paintscrolltoselection = true;
-            doc->canvas->Refresh();
+            if (doc->canvas) doc->canvas->Refresh();
         };
     }
 
@@ -328,7 +328,7 @@ class Selection {
             if (action == A_DOWN && oldy + oldcell->mergeys < grid->ys) y = oldy + oldcell->mergeys;
         }
         if (grid && !textedit && xs == 1 && ys == 1) grid->NormalizeSelection(*this);
-        sys->frame->UpdateStatus(doc->selected, true);
+        if (sys->frame) sys->frame->UpdateStatus(doc->selected, true);
     }
 
     void Next(Document *doc, bool backwards) {
@@ -354,7 +354,7 @@ class Selection {
         }
         EnterEdit(doc, 0, MaxCursor());
         doc->paintscrolltoselection = true;
-        doc->canvas->Refresh();
+        if (doc->canvas) doc->canvas->Refresh();
     }
 
     wxString Wrap(Document *doc) {
@@ -377,7 +377,7 @@ class Selection {
         np->parent = grid->cell;
         xs = ys = 1;
         EnterEdit(doc, MaxCursor(), MaxCursor());
-        doc->canvas->Refresh();
+        if (doc->canvas) doc->canvas->Refresh();
         return wxEmptyString;
     }
 
@@ -407,6 +407,6 @@ class Selection {
             y = grid->ys - 1;
         }
         doc->paintscrolltoselection = true;
-        doc->canvas->Refresh();
+        if (doc->canvas) doc->canvas->Refresh();
     }
 };

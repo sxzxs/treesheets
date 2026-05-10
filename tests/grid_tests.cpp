@@ -1,27 +1,8 @@
-#include <iostream>
-#include <memory>
-
-#include "../src/main.cpp"
+#include "test_helpers.h"
 
 namespace {
 
-int failures = 0;
-
-void Check(bool condition, const char *expression, const char *file, int line) {
-    if (condition) return;
-    failures++;
-    std::cerr << file << ":" << line << ": check failed: " << expression << '\n';
-}
-
-#define CHECK(expr) Check((expr), #expr, __FILE__, __LINE__)
-#define CHECK_EQ(actual, expected) Check(((actual) == (expected)), #actual " == " #expected, __FILE__, __LINE__)
-
-std::unique_ptr<treesheets::Cell> MakeRoot(int xs, int ys) {
-    auto root = std::make_unique<treesheets::Cell>(nullptr, nullptr, treesheets::CT_DATA,
-                                                  std::make_shared<treesheets::Grid>(xs, ys));
-    root->grid->InitCells();
-    return root;
-}
+using namespace test_helpers;
 
 void TestRepairMergedCellsClipsAndMarksCovered() {
     auto root = MakeRoot(3, 3);
@@ -162,34 +143,109 @@ void TestSetAndClearSelectionBorders() {
     CHECK(!grid->HasCustomBorders());
 }
 
+void TestTransposeSwapsCellsAndBorders() {
+    auto root = MakeRoot(2, 3);
+    auto grid = root->grid.get();
+
+    for (int y = 0; y < grid->ys; y++)
+        for (int x = 0; x < grid->xs; x++)
+            grid->C(x, y)->text.t = wxString::Format("%d,%d", x, y);
+
+    grid->VBorder(2, 1).width = 3;
+    grid->VBorder(2, 1).color = 0x112233;
+    grid->HBorder(1, 3).width = 4;
+    grid->HBorder(1, 3).color = 0x445566;
+
+    grid->Transpose();
+
+    CHECK_EQ(grid->xs, 3);
+    CHECK_EQ(grid->ys, 2);
+    CHECK_EQ(grid->C(0, 0)->text.t, wxString("0,0"));
+    CHECK_EQ(grid->C(1, 0)->text.t, wxString("0,1"));
+    CHECK_EQ(grid->C(2, 0)->text.t, wxString("0,2"));
+    CHECK_EQ(grid->C(0, 1)->text.t, wxString("1,0"));
+    CHECK_EQ(grid->C(1, 1)->text.t, wxString("1,1"));
+    CHECK_EQ(grid->C(2, 1)->text.t, wxString("1,2"));
+    CHECK_EQ(grid->HBorder(1, 2).width, 3);
+    CHECK_EQ(grid->HBorder(1, 2).color, 0x112233u);
+    CHECK_EQ(grid->VBorder(3, 1).width, 4);
+    CHECK_EQ(grid->VBorder(3, 1).color, 0x445566u);
+}
+
+void TestSortRowsUsesSelectionColumnFirst() {
+    auto root = MakeRoot(3, 4);
+    auto grid = root->grid.get();
+    const char *rows[][3] = {
+        {"0", "b", "2"},
+        {"1", "a", "2"},
+        {"2", "b", "1"},
+        {"3", "a", "2"},
+    };
+
+    for (int y = 0; y < 4; y++)
+        for (int x = 0; x < 3; x++)
+            grid->C(x, y)->text.t = rows[y][x];
+
+    treesheets::Selection selection(root->grid, 1, 0, 1, 4);
+    grid->Sort(selection, false);
+
+    CHECK_EQ(grid->C(0, 0)->text.t, wxString("1"));
+    CHECK_EQ(grid->C(0, 1)->text.t, wxString("3"));
+    CHECK_EQ(grid->C(0, 2)->text.t, wxString("2"));
+    CHECK_EQ(grid->C(0, 3)->text.t, wxString("0"));
+}
+
+void TestLargeCloneAndSortStressPreservesDataAndMemoryEstimate() {
+    constexpr int xs = 64;
+    constexpr int ys = 64;
+    auto root = MakeRoot(xs, ys);
+    auto grid = root->grid.get();
+
+    for (int y = 0; y < ys; y++) {
+        for (int x = 0; x < xs; x++) {
+            grid->C(x, y)->text.t = wxString::Format("%03d-%03d", ys - y, x);
+            grid->C(x, y)->cellcolor = 0x101010 + static_cast<uint>((x + y) % 32);
+        }
+    }
+    grid->SetSelectionOuterBorder(treesheets::Selection(root->grid, 4, 4, 24, 24), 0xAABBCC, 2,
+                                  true);
+
+    auto memory_before = root->EstimatedMemoryUse();
+    CHECK(memory_before > 0);
+
+    auto clone = grid->CloneSel(treesheets::Selection(root->grid, 4, 4, 24, 24));
+    CHECK_EQ(clone->grid->xs, 24);
+    CHECK_EQ(clone->grid->ys, 24);
+    CHECK_EQ(clone->grid->C(0, 0)->text.t, wxString("060-004"));
+    CHECK_EQ(clone->grid->C(23, 23)->text.t, wxString("037-027"));
+    CHECK_EQ(clone->grid->HBorder(0, 0).color, 0xAABBCCu);
+
+    treesheets::Selection sort_selection(root->grid, 0, 0, 1, ys);
+    grid->Sort(sort_selection, false);
+
+    CHECK_EQ(grid->C(0, 0)->text.t, wxString("001-000"));
+    CHECK_EQ(grid->C(0, ys - 1)->text.t, wxString("064-000"));
+    CHECK(root->EstimatedMemoryUse() >= memory_before);
+}
+
 }  // namespace
 
 int main() {
-    wxInitializer initializer;
-    if (!initializer.IsOk()) {
+    TestSystem test_system;
+    if (!test_system.IsOk()) {
         std::cerr << "failed to initialize wxWidgets\n";
         return 1;
     }
 
-    {
-        treesheets::System system(true);
-        treesheets::sys = &system;
+    TestRepairMergedCellsClipsAndMarksCovered();
+    TestNormalizeSelectionMovesCoveredCellToMaster();
+    TestCloneSelectionPreservesMergedCellsAndBorders();
+    TestInsertColumnCopiesNeighborStyleAndShiftsContent();
+    TestDeleteColumnRemovesContentAndShrinksBorderStorage();
+    TestSetAndClearSelectionBorders();
+    TestTransposeSwapsCellsAndBorders();
+    TestSortRowsUsesSelectionColumnFirst();
+    TestLargeCloneAndSortStressPreservesDataAndMemoryEstimate();
 
-        TestRepairMergedCellsClipsAndMarksCovered();
-        TestNormalizeSelectionMovesCoveredCellToMaster();
-        TestCloneSelectionPreservesMergedCellsAndBorders();
-        TestInsertColumnCopiesNeighborStyleAndShiftsContent();
-        TestDeleteColumnRemovesContentAndShrinksBorderStorage();
-        TestSetAndClearSelectionBorders();
-
-        treesheets::sys = nullptr;
-    }
-
-    if (failures) {
-        std::cerr << failures << " test check(s) failed\n";
-        return 1;
-    }
-
-    std::cout << "grid tests passed\n";
-    return 0;
+    return Finish("grid tests passed");
 }

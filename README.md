@@ -81,6 +81,8 @@ cd treesheets
 
 If you do not have `wxWidgets` installed, you may want to set `wxBUILD_INSTALL` and `wxBUILD_SHARED` to off in the build configuration. This ensures a TreeSheets build with wxWidgets libraries statically linked in.
 
+Developer test commands are documented in [docs/development.md](docs/development.md).
+
 Contributing
 ------------
 I welcome contributions, especially in the form of neatly prepared pull requests. The main thing to keep in mind when

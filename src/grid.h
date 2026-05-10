@@ -724,7 +724,7 @@ struct Grid {
     void MultiCellDelete(Document *doc, Selection &sel) {
         cell->AddUndo(doc);
         MultiCellDeleteSub(doc, sel);
-        doc->canvas->Refresh();
+        if (doc->canvas) doc->canvas->Refresh();
     }
 
     void MultiCellDeleteSub(Document *doc, Selection &sel) {
@@ -776,7 +776,7 @@ struct Grid {
         sel.xs = 1;
         sel.ys = 1;
         cell->ResetChildren();
-        doc->canvas->Refresh();
+        if (doc->canvas) doc->canvas->Refresh();
         return wxEmptyString;
     }
 
@@ -786,7 +786,7 @@ struct Grid {
         cell->AddUndo(doc);
         UnmergeIntersecting(sel);
         cell->ResetChildren();
-        doc->canvas->Refresh();
+        if (doc->canvas) doc->canvas->Refresh();
         return wxEmptyString;
     }
 
@@ -1080,8 +1080,10 @@ struct Grid {
         loop(y, as.size()) {
             auto s = as[y];
             wxString word;
-            for (int x = 0; s[0]; x++) {
-                if (s[0] == '\"') {
+            if (cy >= ys) InsertCells(-1, cy, 0, 1);
+            for (int x = 0;; x++) {
+                bool hasmore = false;
+                if (!s.empty() && s[0] == '\"') {
                     word = "";
                     for (int i = 1;; i++) {
                         if (!s[i]) {
@@ -1097,7 +1099,13 @@ struct Grid {
                             if (s[i + 1] == '\"')
                                 word += s[++i];
                             else {
-                                s = s.size() == i + 1 ? wxString(L"") : s.Mid(i + 2);
+                                auto afterquote = i + 1;
+                                if (s.Mid(afterquote, sep.Len()) == sep) {
+                                    s = s.Mid(afterquote + sep.Len());
+                                    hasmore = true;
+                                } else {
+                                    s = wxString(L"");
+                                }
                                 break;
                             }
                         } else
@@ -1110,12 +1118,14 @@ struct Grid {
                         s = "";
                     } else {
                         word = s.Left(pos);
-                        s = s.Mid(pos + 1);
+                        s = s.Mid(pos + sep.Len());
+                        hasmore = true;
                     }
                 }
                 if (x >= xs) InsertCells(x, -1, 1, 0);
                 Cell *c = C(x, cy).get();
                 c->text.t = word;
+                if (!hasmore) break;
             }
             cy++;
         }
