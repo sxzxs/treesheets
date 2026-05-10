@@ -36,6 +36,7 @@ struct TSFrame : wxFrame {
     wxString imagepath;
     int refreshhack {0};
     int refreshhackinstances {0};
+    bool globalshowhotkeyregistered {false};
     std::map<wxString, wxString> menustrings;
 
     struct ExplorerTreeItemData : wxTreeItemData {
@@ -595,6 +596,8 @@ struct TSFrame : wxFrame {
         viewmenu->AppendSeparator();
         MyAppend(viewmenu, A_EXPLORER, _("Explorer") + "\tCTRL+SHIFT+E",
                  _("Toggle the file Explorer panel"));
+        MyAppend(viewmenu, A_EXPLORERSEARCH, _("Search Explorer") + "\tCTRL+ALT+E",
+                 _("Focus the Explorer search box"));
         MyAppend(viewmenu, A_EXPLORERROOT, _("Open Explorer Folder..."),
                  _("Choose the folder shown in the Explorer"));
         MyAppend(viewmenu, A_EXPLORERREVEALACTIVE, _("Reveal Active File in Explorer"));
@@ -702,6 +705,11 @@ struct TSFrame : wxFrame {
         optmenu->AppendCheckItem(A_STARTMINIMIZED, _("Start minimized"),
                                  _("Start the application minimized"));
         optmenu->Check(A_STARTMINIMIZED, sys->startminimized);
+        optmenu->AppendCheckItem(
+            A_GLOBALSHOWHOTKEY,
+            wxString::Format(_("Global show hotkey (%s)"), sys->globalshowhotkey),
+            _("Toggle whether the global hotkey shows the TreeSheets window"));
+        optmenu->Check(A_GLOBALSHOWHOTKEY, sys->globalshowhotkeyenabled);
         optmenu->AppendSeparator();
         optmenu->AppendCheckItem(A_ZOOMSCR, _("Swap mousewheel scrolling and zooming"));
         optmenu->Check(A_ZOOMSCR, sys->zoomscroll);
@@ -893,6 +901,8 @@ struct TSFrame : wxFrame {
                 Iconize(true);
             #endif
 
+        RegisterGlobalShowHotKey();
+
         SetFileAssoc(app->exename);
 
         wxSafeYield();
@@ -957,7 +967,8 @@ struct TSFrame : wxFrame {
             ExplorerNewFolder();
         });
         explorersearch->Bind(wxEVT_TEXT, &TSFrame::OnExplorerSearch, this);
-        explorersearch->Bind(wxEVT_TEXT_ENTER, &TSFrame::OnExplorerSearch, this);
+        explorersearch->Bind(wxEVT_TEXT_ENTER, &TSFrame::OnExplorerSearchEnter, this);
+        explorersearch->Bind(wxEVT_KEY_DOWN, &TSFrame::OnExplorerSearchKeyDown, this);
         explorersearch->Bind(wxEVT_SEARCHCTRL_CANCEL_BTN, [this](wxCommandEvent &) {
             explorersearch->Clear();
             RefreshExplorerSearch();
@@ -1013,6 +1024,13 @@ struct TSFrame : wxFrame {
         if (!pane.IsOk()) return;
         pane.Show(false);
         aui.Update();
+    }
+
+    void FocusExplorerSearch() {
+        ShowExplorer();
+        if (!explorersearch) return;
+        explorersearch->SetFocus();
+        explorersearch->SelectAll();
     }
 
     void MaybeAutoHideExplorer() {
@@ -1339,9 +1357,39 @@ struct TSFrame : wxFrame {
                                         static_cast<int>(explorerresultpaths.size())));
         }
         explorerresults->Append(labels);
+        if (!explorerresultpaths.empty()) {
+            explorerresults->SetSelection(0);
+            explorerresults->EnsureVisible(0);
+        } else {
+            explorerresults->SetSelection(wxNOT_FOUND);
+        }
         explorertree->Hide();
         explorerresults->Show();
         explorerpane->Layout();
+    }
+
+    bool ExplorerSearchHasOpenableResult() const {
+        return explorerresults && explorerresults->IsShown() && !explorerresultpaths.empty();
+    }
+
+    void MoveExplorerSearchSelection(int delta) {
+        if (!ExplorerSearchHasOpenableResult()) return;
+        int last = static_cast<int>(explorerresultpaths.size()) - 1;
+        int selection = explorerresults->GetSelection();
+        if (selection < 0 || selection > last) selection = delta < 0 ? last : 0;
+        else selection = min(last, max(0, selection + delta));
+        explorerresults->SetSelection(selection);
+        explorerresults->EnsureVisible(selection);
+    }
+
+    bool OpenSelectedExplorerSearchResult() {
+        if (!ExplorerSearchHasOpenableResult()) return false;
+        int selection = explorerresults->GetSelection();
+        if (selection < 0 || static_cast<size_t>(selection) >= explorerresultpaths.size())
+            selection = 0;
+        explorerresults->SetSelection(selection);
+        OpenExplorerPath(explorerresultpaths[selection]);
+        return true;
     }
 
     bool SelectExplorerTreePath(const wxString &path) {
@@ -1717,6 +1765,24 @@ struct TSFrame : wxFrame {
     }
 
     void OnExplorerSearch(wxCommandEvent &) { RefreshExplorerSearch(); }
+
+    void OnExplorerSearchEnter(wxCommandEvent &) { OpenSelectedExplorerSearchResult(); }
+
+    void OnExplorerSearchKeyDown(wxKeyEvent &event) {
+        switch (event.GetKeyCode()) {
+            case WXK_UP:
+                MoveExplorerSearchSelection(-1);
+                return;
+            case WXK_DOWN:
+                MoveExplorerSearchSelection(1);
+                return;
+            case WXK_RETURN:
+            case WXK_NUMPAD_ENTER:
+                if (OpenSelectedExplorerSearchResult()) return;
+                break;
+        }
+        event.Skip();
+    }
 
     void OnExplorerTreeExpanding(wxTreeEvent &event) {
         auto item = event.GetItem();
@@ -2196,6 +2262,9 @@ struct TSFrame : wxFrame {
             case A_EXPLORER:
                 ToggleExplorer();
                 break;
+            case A_EXPLORERSEARCH:
+                FocusExplorerSearch();
+                break;
             case A_EXPLORERROOT:
                 ChooseExplorerRoot();
                 break;
@@ -2329,6 +2398,14 @@ struct TSFrame : wxFrame {
             case A_MINCLOSE: sys->cfg->Write("minclose", sys->minclose = ce.IsChecked()); break;
             case A_STARTMINIMIZED:
                 sys->cfg->Write("startminimized", sys->startminimized = ce.IsChecked());
+                break;
+            case A_GLOBALSHOWHOTKEY:
+                sys->cfg->Write("globalshowhotkeyenabled",
+                                sys->globalshowhotkeyenabled = ce.IsChecked());
+                if (sys->globalshowhotkeyenabled)
+                    RegisterGlobalShowHotKey();
+                else
+                    UnregisterGlobalShowHotKey();
                 break;
             case A_ZOOMSCR: sys->cfg->Write("zoomscroll", sys->zoomscroll = ce.IsChecked()); break;
             case A_THINSELC: sys->cfg->Write("thinselc", sys->thinselc = ce.IsChecked()); break;
@@ -2479,6 +2556,8 @@ struct TSFrame : wxFrame {
         ReFocus();
     }
 
+    void OnGlobalShowHotKey(wxKeyEvent &) { ShowMainInterface(); }
+
     void OnSizing(wxSizeEvent &se) { se.Skip(); }
 
     void OnMaximize(wxMaximizeEvent &me) {
@@ -2600,6 +2679,7 @@ struct TSFrame : wxFrame {
         sys->cfg->Write("lastcellcolor", sys->lastcellcolor);
         sys->cfg->Write("lasttextcolor", sys->lasttextcolor);
         sys->cfg->Write("lastbordcolor", sys->lastbordcolor);
+        UnregisterGlobalShowHotKey();
         aui.ClearEventHashTable();
         aui.UnInit();
         DELETEP(editmenupopup);
@@ -2661,13 +2741,24 @@ struct TSFrame : wxFrame {
     }
 
     void DeIconize() {
-        if (!IsIconized()) {
+        if (IsShown() && !IsIconized()) {
+            Raise();
             RequestUserAttention();
+            ReFocus();
             return;
         }
+        ShowMainInterface();
+    }
+
+    void ShowMainInterface() {
         Show(true);
-        Iconize(false);
+        if (IsIconized()) Iconize(false);
         UpdateTrayIcon();
+        Raise();
+        #ifdef __WXMSW__
+            if (GetHWND()) ::SetForegroundWindow((HWND)GetHWND());
+        #endif
+        ReFocus();
     }
 
     TSCanvas *GetCurrentTab() {
@@ -2717,6 +2808,82 @@ struct TSFrame : wxFrame {
 
     void ReFocus() {
         if (TSCanvas *canvas = GetCurrentTab()) canvas->SetFocus();
+    }
+
+    bool ParseGlobalHotKey(const wxString &spec, int &modifiers, int &keycode) {
+        modifiers = wxMOD_NONE;
+        keycode = 0;
+        auto parts = wxStringTokenize(spec.Upper(), "+", wxTOKEN_STRTOK);
+        for (auto part : parts) {
+            part.Trim(true);
+            part.Trim(false);
+            if (part.empty()) continue;
+
+            if (part == "ALT") {
+                modifiers |= wxMOD_ALT;
+            } else if (part == "CTRL" || part == "CONTROL") {
+                modifiers |= wxMOD_CONTROL;
+            } else if (part == "SHIFT") {
+                modifiers |= wxMOD_SHIFT;
+            } else if (part == "CMD" || part == "COMMAND") {
+                modifiers |= wxMOD_CMD;
+            } else if (part == "WIN" || part == "META" || part == "SUPER") {
+                modifiers |= wxMOD_WIN;
+            } else if (part == "ESC" || part == "ESCAPE") {
+                keycode = WXK_ESCAPE;
+            } else if (part == "SPACE") {
+                keycode = WXK_SPACE;
+            } else if (part == "TAB") {
+                keycode = WXK_TAB;
+            } else if (part == "ENTER" || part == "RETURN") {
+                keycode = WXK_RETURN;
+            } else {
+                wxString number;
+                long function_key = 0;
+                if (part.StartsWith("F", &number) && number.ToLong(&function_key) &&
+                    function_key >= 1 && function_key <= 24) {
+                    keycode = WXK_F1 + static_cast<int>(function_key) - 1;
+                } else if (part.Length() == 1) {
+                    keycode = static_cast<int>(part.GetChar(0).GetValue());
+                } else {
+                    return false;
+                }
+            }
+        }
+        return modifiers != wxMOD_NONE && keycode != 0;
+    }
+
+    bool RegisterGlobalShowHotKey() {
+        UnregisterGlobalShowHotKey();
+        if (!sys->globalshowhotkeyenabled) return false;
+
+        int modifiers = wxMOD_NONE;
+        int keycode = 0;
+        if (!ParseGlobalHotKey(sys->globalshowhotkey, modifiers, keycode)) {
+            wxLogWarning("Invalid global show hotkey: %s", sys->globalshowhotkey);
+            return false;
+        }
+
+        #if wxUSE_HOTKEY
+            globalshowhotkeyregistered =
+                RegisterHotKey(A_GLOBALSHOWHOTKEY, modifiers, keycode);
+            if (!globalshowhotkeyregistered)
+                wxLogWarning("Could not register global show hotkey: %s",
+                             sys->globalshowhotkey);
+            return globalshowhotkeyregistered;
+        #else
+            wxLogWarning("Global show hotkeys are not supported by this wxWidgets build.");
+            return false;
+        #endif
+    }
+
+    void UnregisterGlobalShowHotKey() {
+        #if wxUSE_HOTKEY
+            if (globalshowhotkeyregistered) {
+                UnregisterHotKey(A_GLOBALSHOWHOTKEY);
+                globalshowhotkeyregistered = false;
+            }
+        #endif
     }
 
     void RenderFolderIcon() {

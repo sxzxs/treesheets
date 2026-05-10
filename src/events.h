@@ -8,6 +8,9 @@ BEGIN_EVENT_TABLE(treesheets::TSFrame, wxFrame)
   EVT_CLOSE(treesheets::TSFrame::OnClosing)
   EVT_MAXIMIZE(treesheets::TSFrame::OnMaximize)
   EVT_ACTIVATE_APP(treesheets::TSFrame::OnActivate)
+  #if wxUSE_HOTKEY
+  EVT_HOTKEY(A_GLOBALSHOWHOTKEY, treesheets::TSFrame::OnGlobalShowHotKey)
+  #endif
   EVT_COMBOBOX(A_CELLCOLOR, treesheets::TSFrame::OnChangeColor)
   EVT_COMBOBOX(A_TEXTCOLOR, treesheets::TSFrame::OnChangeColor)
   EVT_COMBOBOX(A_BORDCOLOR, treesheets::TSFrame::OnChangeColor)

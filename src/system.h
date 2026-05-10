@@ -33,6 +33,8 @@ struct System {
     bool minclose {false};
     bool singletray {false};
     bool startminimized {false};
+    bool globalshowhotkeyenabled {true};
+    wxString globalshowhotkey {"ALT+Q"};
     bool centered {true};
     bool fswatch {true};
     int autohtmlexport {0};
@@ -89,6 +91,9 @@ struct System {
         cfg->Read("minclose", &minclose, minclose);
         cfg->Read("singletray", &singletray, singletray);
         cfg->Read("startminimized", &startminimized, startminimized);
+        cfg->Read("globalshowhotkeyenabled", &globalshowhotkeyenabled,
+                  globalshowhotkeyenabled);
+        globalshowhotkey = cfg->Read("globalshowhotkey", globalshowhotkey);
         cfg->Read("centered", &centered, centered);
         cfg->Read("fswatch", &fswatch, fswatch);
         cfg->Read("casesensitivesearch", &casesensitivesearch, casesensitivesearch);
