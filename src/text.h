@@ -55,7 +55,8 @@ struct Text {
             auto &[it, mime] = imagetypes.at(image->type);
             auto bm = ConvertBufferToWxBitmap(image->data, it);
             image->pixel_width = bm.GetWidth();
-            ScaleBitmap(bm, sys->frame->FromDIP(1.0) / effective_scale, bm_image_display);
+            auto dpi_scale = sys->frame ? sys->frame->FromDIP(1.0) : 1.0;
+            ScaleBitmap(bm, dpi_scale / effective_scale, bm_image_display);
             bm_image_source = image;
             bm_image_hash = image->hash;
             bm_image_type = image->type;
@@ -618,7 +619,7 @@ struct Text {
         }
 
         auto display = BuildDisplayLine(ls);
-        s.cursor = s.cursorend = linestart + SourceCursorFromDisplayX(dc, display, bx - ixs + 2);
+        s.cursor = s.cursorend = linestart + SourceCursorFromDisplayX(dc, display, bx - ixs - 2);
         ASSERT(s.cursor >= 0 && s.cursor <= static_cast<int>(t.Len()));
     }
 

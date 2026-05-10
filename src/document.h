@@ -14,6 +14,7 @@ struct Document {
     Selection prev;
     Selection hover;
     Selection selected;
+    Selection image_selection;
     Selection begindrag;
     int isctrlshiftdrag;
     int scrollx;
@@ -77,6 +78,7 @@ struct Document {
     bool paintscrolltoselection {true};
     double currentviewscale {1.0};
     bool image_resize_dragging {false};
+    bool image_selected {false};
     Cell *image_resize_cell {nullptr};
     double image_resize_start_scale {1.0};
     int image_resize_start_width {0};
@@ -246,6 +248,15 @@ struct Document {
                        static_cast<int>(y / currentviewscale - centery / currentviewscale));
     }
 
+    Cell *ImageCellAtDevicePoint(int mx, int my) {
+        if (!canvas) return nullptr;
+        auto cell = hover.GetCell();
+        if (!cell || !cell->text.image) return nullptr;
+        wxRect image_rect;
+        if (!cell->ImageDisplayRect(this, image_rect)) return nullptr;
+        return image_rect.Contains(DeviceToDocumentPoint(mx, my)) ? cell : nullptr;
+    }
+
     static wxRect ImageResizeHandleRect(const wxRect &image_rect) {
         const int handle = 8;
         return wxRect(image_rect.x + max(0, image_rect.width - handle),
@@ -259,6 +270,15 @@ struct Document {
         if (!cell->ImageDisplayRect(this, rect)) return false;
         if (image_cell) *image_cell = cell;
         return true;
+    }
+
+    void DrawSelectedImageOutline(wxDC &dc) {
+        if (!SelectedImageCell()) return;
+        wxRect image_rect;
+        if (!SelectedImageRect(image_rect)) return;
+        dc.SetBrush(*wxTRANSPARENT_BRUSH);
+        dc.SetPen(wxPen(LightColor(0x000000), 2));
+        dc.DrawRectangle(image_rect);
     }
 
     bool ImageResizeHitTest(int mx, int my) {
@@ -392,6 +412,37 @@ struct Document {
     void SetSelect(const Selection &sel = Selection()) {
         selected = sel;
         begindrag = sel;
+        image_selected = false;
+        image_selection = Selection();
+    }
+
+    bool ImageSelectionMatchesSelection() const {
+        return image_selected && selected.grid == image_selection.grid &&
+               selected.x == image_selection.x && selected.y == image_selection.y &&
+               selected.xs == image_selection.xs && selected.ys == image_selection.ys;
+    }
+
+    Cell *SelectedImageCell() {
+        if (!ImageSelectionMatchesSelection() || selected.TextEdit()) return nullptr;
+        auto cell = selected.GetCell();
+        return cell && cell->text.image ? cell : nullptr;
+    }
+
+    bool MarkSelectedImage() {
+        auto cell = selected.GetCell();
+        if (!cell || !cell->text.image || selected.TextEdit()) {
+            image_selected = false;
+            image_selection = Selection();
+            return false;
+        }
+        image_selected = true;
+        image_selection = selected;
+        return true;
+    }
+
+    void ClearImageSelection() {
+        image_selected = false;
+        image_selection = Selection();
     }
 
     void SelectUp() {
@@ -448,6 +499,33 @@ struct Document {
         return new wxHTMLDataObject(html);
     }
 
+    bool CopyImageToClipboard(Image *image) {
+        if (!image || image->data.empty() || !wxTheClipboard->Open()) return false;
+        auto &[it, mime] = imagetypes.at(image->type);
+        auto bitmap = ConvertBufferToWxBitmap(image->data, it);
+        wxTheClipboard->SetData(new wxBitmapDataObject(bitmap));
+        wxTheClipboard->Close();
+        return true;
+    }
+
+    bool RemoveSelectedImage() {
+        auto cell = SelectedImageCell();
+        if (!cell) return false;
+        cell->AddUndo(this);
+        cell->text.image = nullptr;
+        cell->text.ResetImageScale();
+        cell->text.WasEdited();
+        ClearImageSelection();
+        if (currentdrawroot) {
+            currentdrawroot->ResetChildren();
+            currentdrawroot->ResetLayout();
+        } else {
+            cell->ResetLayout();
+        }
+        if (canvas) canvas->Refresh();
+        return true;
+    }
+
     void Copy(int action) {
         auto c = selected.GetCell();
         sys->clipboardcopy = wxEmptyString;
@@ -493,14 +571,11 @@ struct Document {
             case A_COPYWI:
             default: {
                 sys->cellclipboard = c ? c->Clone(nullptr) : selected.grid->CloneSel(selected);
-                if (c && !c->text.t && c->text.image) {
-                    auto image = c->text.image;
-                    if (!image->data.empty() && wxTheClipboard->Open()) {
-                        auto &[it, mime] = imagetypes.at(image->type);
-                        auto bitmap = ConvertBufferToWxBitmap(image->data, it);
-                        wxTheClipboard->SetData(new wxBitmapDataObject(bitmap));
-                        wxTheClipboard->Close();
-                    }
+                if (auto imagecell = SelectedImageCell()) {
+                    sys->cellclipboard = nullptr;
+                    CopyImageToClipboard(imagecell->text.image);
+                } else if (c && !c->text.t && c->text.image) {
+                    CopyImageToClipboard(c->text.image);
                 } else {
                     auto clipboarddata = new wxDataObjectComposite();
                     auto s = selected.grid->ConvertToText(selected, 0, A_EXPTEXT, this, false,
@@ -652,8 +727,15 @@ struct Document {
                                 currentdrawroot->ColWidth(), 0);
     }
 
-    void SelectClick(bool right = false) {
+    void SelectClick(bool right = false, bool image_hit = false) {
         begindrag = Selection();
+        if (image_hit) {
+            hover.ExitEdit(this);
+            SetSelect(hover);
+            MarkSelectedImage();
+            return;
+        }
+        ClearImageSelection();
         if (!(right && hover.IsInside(selected))) {
             if (selected.GetCell() == hover.GetCell() && hover.GetCell())
                 hover.EnterEditOnly(this);
@@ -699,6 +781,7 @@ struct Document {
         ShiftToCenter(dc);
         Render(dc);
         DrawSelect(dc, selected);
+        DrawSelectedImageOutline(dc);
         DrawImageResizeHandle(dc);
         if (paintscrolltoselection) {
             paintscrolltoselection = false;
@@ -1476,6 +1559,8 @@ struct Document {
                     cell->AddUndo(this);
                     cell->text.Backspace(selected);
                     if (canvas) canvas->Refresh();
+                } else if (RemoveSelectedImage()) {
+                    return wxEmptyString;
                 } else {
                     selected.grid->MultiCellDelete(this, selected);
                     SetSelect(selected);
@@ -1496,6 +1581,8 @@ struct Document {
                     cell->AddUndo(this);
                     cell->text.Delete(selected);
                     if (canvas) canvas->Refresh();
+                } else if (RemoveSelectedImage()) {
+                    return wxEmptyString;
                 } else {
                     selected.grid->MultiCellDelete(this, selected);
                     SetSelect(selected);
@@ -1523,7 +1610,9 @@ struct Document {
                 }
                 Copy(action);
                 if (action == wxID_CUT) {
-                    if (!selected.TextEdit()) {
+                    if (RemoveSelectedImage()) {
+                        return wxEmptyString;
+                    } else if (!selected.TextEdit()) {
                         selected.grid->cell->AddUndo(this);
                         selected.grid->MultiCellDelete(this, selected);
                         SetSelect(selected);
@@ -1800,6 +1889,7 @@ struct Document {
             }
 
             case A_IMAGER: {
+                if (RemoveSelectedImage()) return wxEmptyString;
                 selected.grid->cell->AddUndo(this);
                 selected.grid->ClearImages(selected);
                 selected.grid->cell->ResetChildren();
@@ -3329,6 +3419,7 @@ struct Document {
         c->text.image = sys->lastimage =
             sys->imagelist[sys->AddImageToList(scale, std::move(data), type)].get();
         c->text.ResetImageScale();
+        ClearImageSelection();
     }
 
     bool LoadImageIntoCell(const wxString &filename, Cell *c, double scale) {

@@ -43,7 +43,8 @@ struct Image {
             auto &[it, mime] = imagetypes.at(type);
             auto bm = ConvertBufferToWxBitmap(data, it);
             pixel_width = bm.GetWidth();
-            ScaleBitmap(bm, sys->frame->FromDIP(1.0) / display_scale, bm_display);
+            auto dpi_scale = sys->frame ? sys->frame->FromDIP(1.0) : 1.0;
+            ScaleBitmap(bm, dpi_scale / display_scale, bm_display);
         }
         return bm_display;
     }

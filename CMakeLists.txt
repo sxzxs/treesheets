@@ -141,7 +141,18 @@ if (WITH_CLANG_TIDY)
     set(CMAKE_CXX_CLANG_TIDY clang-tidy -checks=cppcoreguidelines-*,clang-analyzer-*,readability-*,performance-*,portability-*,concurrency-*,modernize-*)
 endif()
 
-### Libraries (lobster, lobster-impl)
+### Libraries (pinyin, lobster, lobster-impl)
+
+add_library(TreeSheetsPinyin STATIC
+    thirdparty/pinyin/vendor/source/data.cpp
+    thirdparty/pinyin/vendor/source/double_pinyin.cpp
+    thirdparty/pinyin/vendor/source/pinyin.cpp)
+target_include_directories(TreeSheetsPinyin PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/pinyin/vendor/include")
+target_compile_definitions(TreeSheetsPinyin PUBLIC IB_PINYIN_ENCODING=32)
+if(MSVC)
+    target_compile_options(TreeSheetsPinyin PRIVATE /utf-8)
+endif()
 
 ## lobster (script interpreter)
 if(ENABLE_LOBSTER)
@@ -215,7 +226,7 @@ target_precompile_headers(TreeSheets PUBLIC src/stdafx.h)
 if(ENABLE_LOBSTER)
     target_link_libraries(TreeSheets PRIVATE lobster-impl)
 endif(ENABLE_LOBSTER)
-target_link_libraries(TreeSheets PRIVATE wx::aui wx::adv wx::core wx::xml wx::net)
+target_link_libraries(TreeSheets PRIVATE TreeSheetsPinyin wx::aui wx::adv wx::core wx::xml wx::net)
 
 ### Tests
 
@@ -231,7 +242,8 @@ if(TREESHEETS_BUILD_TESTS)
         "TREESHEETS_TESTING=1"
         "PACKAGE_VERSION=\"test\""
         "TREESHEETS_SOURCE_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}\"")
-    target_link_libraries(TreeSheetsTestSupport INTERFACE wx::aui wx::adv wx::core wx::xml wx::net)
+    target_link_libraries(TreeSheetsTestSupport INTERFACE
+        TreeSheetsPinyin wx::aui wx::adv wx::core wx::xml wx::net)
 
     function(add_treesheets_test target source)
         set_source_files_properties(${source}

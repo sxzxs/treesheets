@@ -1,4 +1,5 @@
 struct TSFrame : wxFrame {
+    static constexpr int toolbarlayoutversion = 4;
     TSApp *app;
     wxIcon icon;
     wxTaskBarIcon taskbaricon;
@@ -38,10 +39,23 @@ struct TSFrame : wxFrame {
     int refreshhackinstances {0};
     bool globalshowhotkeyregistered {false};
     std::map<wxString, wxString> menustrings;
+    std::map<int, wxString> menuaccelerators;
 
     struct ExplorerTreeItemData : wxTreeItemData {
         wxString path;
         explicit ExplorerTreeItemData(const wxString &_path) : path(_path) {}
+    };
+
+    struct ExplorerSearchToken {
+        wxString text;
+        ::pinyin::String pinyin;
+    };
+
+    struct ExplorerSearchText {
+        wxString text;
+        ::pinyin::String pinyin;
+        ::pinyin::String initials;
+        ::pinyin::String alternatives;
     };
 
     TSFrame(TSApp *_app)
@@ -681,6 +695,8 @@ struct TSFrame : wxFrame {
         optmenu->AppendSeparator();
         MyAppend(optmenu, A_RESETPERSPECTIVE, _("Reset toolbar"),
                  _("Reset the toolbar appearance"));
+        MyAppend(optmenu, A_CUSTOMIZETOOLBAR, _("Customize toolbar..."),
+                 _("Choose which toolbar sections are shown"));
         optmenu->AppendCheckItem(
             A_SHOWTBAR, _("Toolbar"),
             _("Toggle whether toolbar is shown between menu bar and documents"));
@@ -824,8 +840,6 @@ struct TSFrame : wxFrame {
         #endif
         SetMenuBar(menubar);
 
-        RefreshToolBar();
-
         auto sb = CreateStatusBar(5);
         SetStatusBarPane(0);
         SetDPIAwareStatusWidths();
@@ -886,7 +900,8 @@ struct TSFrame : wxFrame {
         aui.AddPane(
             notebook,
             wxAuiPaneInfo().Name("notebook").Caption("Notebook").CenterPane().PaneBorder(false));
-        aui.LoadPerspective(sys->cfg->Read("perspective", ""));
+        RefreshToolBar();
+        LoadSavedPerspective();
         aui.Update();
 
         Show(!IsIconized());
@@ -969,6 +984,7 @@ struct TSFrame : wxFrame {
         explorersearch->Bind(wxEVT_TEXT, &TSFrame::OnExplorerSearch, this);
         explorersearch->Bind(wxEVT_TEXT_ENTER, &TSFrame::OnExplorerSearchEnter, this);
         explorersearch->Bind(wxEVT_KEY_DOWN, &TSFrame::OnExplorerSearchKeyDown, this);
+        explorersearch->Bind(wxEVT_CHAR_HOOK, &TSFrame::OnExplorerSearchKeyDown, this);
         explorersearch->Bind(wxEVT_SEARCHCTRL_CANCEL_BTN, [this](wxCommandEvent &) {
             explorersearch->Clear();
             RefreshExplorerSearch();
@@ -981,6 +997,7 @@ struct TSFrame : wxFrame {
         explorerresults->Bind(wxEVT_LISTBOX_DCLICK, &TSFrame::OnExplorerResultActivated, this);
         explorerresults->Bind(wxEVT_CONTEXT_MENU, &TSFrame::OnExplorerResultsContext, this);
         explorerresults->Bind(wxEVT_KEY_DOWN, &TSFrame::OnExplorerKeyDown, this);
+        explorerpane->Bind(wxEVT_CHAR_HOOK, &TSFrame::OnExplorerSearchKeyDown, this);
         explorerpane->Bind(wxEVT_CONTEXT_MENU, &TSFrame::OnExplorerPaneContext, this);
     }
 
@@ -1304,7 +1321,147 @@ struct TSFrame : wxFrame {
         return path;
     }
 
-    void CollectExplorerMatches(const wxString &directory, const wxString &needle, size_t limit) {
+    static ::pinyin::Char LowerExplorerSearchChar(::pinyin::Char ch) {
+        if (ch >= U'A' && ch <= U'Z') return ch - U'A' + U'a';
+        return ch;
+    }
+
+    static bool IsExplorerSearchLiteralChar(::pinyin::Char ch) {
+        return (ch >= U'a' && ch <= U'z') || (ch >= U'0' && ch <= U'9');
+    }
+
+    static void AppendPinyinView(::pinyin::String &target, ::pinyin::StringView value) {
+        target.append(value.begin(), value.end());
+    }
+
+    static bool ContainsPinyinText(const ::pinyin::String &haystack,
+                                   const ::pinyin::String &needle) {
+        return !needle.empty() && haystack.find(needle) != ::pinyin::String::npos;
+    }
+
+    static ::pinyin::String SearchTokenToPinyinText(const wxString &text) {
+        ::pinyin::String result;
+        result.reserve(text.length());
+        for (const auto &chref : text) {
+            auto ch = static_cast<::pinyin::Char>(chref.GetValue());
+            result.push_back(LowerExplorerSearchChar(ch));
+        }
+        return result;
+    }
+
+    static void EnsureExplorerPinyinReady() {
+        static once_flag initialized;
+        call_once(initialized, [] {
+            ::pinyin::init(::pinyin::PinyinFlag::PinyinAscii |
+                           ::pinyin::PinyinFlag::InitialLetter);
+        });
+    }
+
+    template<class Visitor>
+    static bool VisitExplorerPinyinCandidates(uint16_t index, const Visitor &visitor) {
+        constexpr auto basecount = sizeof(::pinyin::pinyins) / sizeof(::pinyin::pinyins[0]);
+        if (index < basecount) {
+            visitor(::pinyin::pinyins[index]);
+            return true;
+        }
+
+        auto combinationindex = static_cast<size_t>(index) - basecount;
+        constexpr auto combinationcount =
+            sizeof(::pinyin::pinyin_combinations) / sizeof(::pinyin::pinyin_combinations[0]);
+        if (combinationindex >= combinationcount) return false;
+
+        bool visited = false;
+        const auto &combination = ::pinyin::pinyin_combinations[combinationindex];
+        for (uint16_t i = 0; i < combination.n; i++) {
+            auto pinyinindex = combination.pinyin[i];
+            if (pinyinindex < basecount) {
+                visitor(::pinyin::pinyins[pinyinindex]);
+                visited = true;
+            }
+        }
+        return visited;
+    }
+
+    ExplorerSearchText BuildExplorerSearchText(const wxString &displaypath) const {
+        EnsureExplorerPinyinReady();
+
+        ExplorerSearchText result;
+        result.text = displaypath.Lower();
+        result.pinyin.reserve(displaypath.length() * 4);
+        result.initials.reserve(displaypath.length());
+        result.alternatives.reserve(displaypath.length() * 4);
+
+        for (const auto &chref : displaypath) {
+            auto ch = static_cast<::pinyin::Char>(chref.GetValue());
+            auto index = ::pinyin::get_pinyin_index(static_cast<char32_t>(ch));
+            bool appendedprimary = false;
+
+            if (index != 0xFFFF) {
+                bool firstcandidate = true;
+                VisitExplorerPinyinCandidates(index, [&](const ::pinyin::Pinyin &candidate) {
+                    if (candidate.pinyin_ascii.empty()) return;
+
+                    result.alternatives.push_back(U' ');
+                    AppendPinyinView(result.alternatives, candidate.pinyin_ascii);
+                    if (candidate.initial_letter != 0) {
+                        result.alternatives.push_back(U' ');
+                        result.alternatives.push_back(
+                            LowerExplorerSearchChar(candidate.initial_letter));
+                    }
+
+                    if (firstcandidate) {
+                        AppendPinyinView(result.pinyin, candidate.pinyin_ascii);
+                        if (candidate.initial_letter != 0) {
+                            result.initials.push_back(
+                                LowerExplorerSearchChar(candidate.initial_letter));
+                        }
+                        appendedprimary = true;
+                        firstcandidate = false;
+                    }
+                });
+            }
+
+            if (appendedprimary) continue;
+
+            auto lower = LowerExplorerSearchChar(ch);
+            if (IsExplorerSearchLiteralChar(lower)) {
+                result.pinyin.push_back(lower);
+                result.initials.push_back(lower);
+            }
+        }
+
+        return result;
+    }
+
+    vector<ExplorerSearchToken> BuildExplorerSearchTokens(wxString query) const {
+        query.Trim(true).Trim(false);
+        auto parts = wxStringTokenize(query.Lower(), " \t\r\n", wxTOKEN_STRTOK);
+        vector<ExplorerSearchToken> tokens;
+        tokens.reserve(parts.size());
+        for (auto &part : parts) {
+            part.Trim(true).Trim(false);
+            if (part.IsEmpty()) continue;
+            tokens.push_back({part, SearchTokenToPinyinText(part)});
+        }
+        return tokens;
+    }
+
+    bool ExplorerPathMatchesSearch(const wxString &path,
+                                   const vector<ExplorerSearchToken> &tokens) const {
+        auto haystack = BuildExplorerSearchText(ExplorerDisplayPath(path));
+        for (const auto &token : tokens) {
+            auto matches = haystack.text.Find(token.text) != wxNOT_FOUND ||
+                           ContainsPinyinText(haystack.pinyin, token.pinyin) ||
+                           ContainsPinyinText(haystack.initials, token.pinyin) ||
+                           ContainsPinyinText(haystack.alternatives, token.pinyin);
+            if (!matches) return false;
+        }
+        return true;
+    }
+
+    void CollectExplorerMatches(const wxString &directory,
+                                const vector<ExplorerSearchToken> &tokens,
+                                size_t limit) {
         if (explorerresultpaths.size() >= limit) return;
         wxDir dir(directory);
         if (!dir.IsOpened()) return;
@@ -1315,11 +1472,9 @@ struct TSFrame : wxFrame {
             wxFileName entrypath(directory, entry);
             auto fullpath = entrypath.GetFullPath();
             if (wxDirExists(fullpath)) {
-                if (!ShouldSkipExplorerDir(entry)) CollectExplorerMatches(fullpath, needle, limit);
+                if (!ShouldSkipExplorerDir(entry)) CollectExplorerMatches(fullpath, tokens, limit);
             } else if (wxFileExists(fullpath) && IsExplorerVisibleFile(fullpath)) {
-                auto relpath = ExplorerDisplayPath(fullpath);
-                auto haystack = relpath.Lower();
-                if (haystack.Find(needle) != wxNOT_FOUND) explorerresultpaths.push_back(fullpath);
+                if (ExplorerPathMatchesSearch(fullpath, tokens)) explorerresultpaths.push_back(fullpath);
             }
             more = dir.GetNext(&entry);
         }
@@ -1328,9 +1483,8 @@ struct TSFrame : wxFrame {
     void RefreshExplorerSearch() {
         if (!explorersearch || !explorertree || !explorerresults) return;
 
-        auto needle = explorersearch->GetValue();
-        needle.Trim(true).Trim(false);
-        if (needle.IsEmpty()) {
+        auto tokens = BuildExplorerSearchTokens(explorersearch->GetValue());
+        if (tokens.empty()) {
             explorerresultpaths.clear();
             explorerresults->Clear();
             explorerresults->Hide();
@@ -1339,11 +1493,10 @@ struct TSFrame : wxFrame {
             return;
         }
 
-        needle.MakeLower();
         explorerresultpaths.clear();
         explorerresults->Clear();
         const size_t resultlimit = 1000;
-        CollectExplorerMatches(explorerroot, needle, resultlimit);
+        CollectExplorerMatches(explorerroot, tokens, resultlimit);
         sort(explorerresultpaths.begin(), explorerresultpaths.end(),
              [this](const wxString &a, const wxString &b) {
                  return ExplorerDisplayPath(a).CmpNoCase(ExplorerDisplayPath(b)) < 0;
@@ -1390,6 +1543,47 @@ struct TSFrame : wxFrame {
         explorerresults->SetSelection(selection);
         OpenExplorerPath(explorerresultpaths[selection]);
         return true;
+    }
+
+    bool MoveExplorerTreeSelection(int delta) {
+        if (!explorertree) return false;
+        if (explorerresults && explorerresults->IsShown() && explorerresultpaths.empty()) {
+            explorerresults->Hide();
+            explorertree->Show();
+            explorerpane->Layout();
+        }
+
+        auto selection = explorertree->GetSelection();
+        if (!selection.IsOk()) selection = explorertree->GetRootItem();
+        if (!selection.IsOk()) return false;
+
+        auto next = delta < 0 ? explorertree->GetPrevVisible(selection)
+                              : explorertree->GetNextVisible(selection);
+        if (!next.IsOk()) return false;
+
+        explorertree->SelectItem(next);
+        explorertree->EnsureVisible(next);
+        return true;
+    }
+
+    bool OpenExplorerSelectedPath() {
+        auto path = ExplorerSelectedPath();
+        if (path.IsEmpty()) return false;
+        OpenExplorerPath(path);
+        return true;
+    }
+
+    bool MoveExplorerSelectionFromSearch(int delta) {
+        if (ExplorerSearchHasOpenableResult()) {
+            MoveExplorerSearchSelection(delta);
+            return true;
+        }
+        return MoveExplorerTreeSelection(delta);
+    }
+
+    bool OpenExplorerSelectionFromSearch() {
+        if (OpenSelectedExplorerSearchResult()) return true;
+        return OpenExplorerSelectedPath();
     }
 
     bool SelectExplorerTreePath(const wxString &path) {
@@ -1764,21 +1958,35 @@ struct TSFrame : wxFrame {
         PopupMenu(&menu);
     }
 
+    bool ExplorerSearchHasFocus() const {
+        auto focus = wxWindow::FindFocus();
+        while (focus) {
+            if (focus == explorersearch) return true;
+            focus = focus->GetParent();
+        }
+        return false;
+    }
+
     void OnExplorerSearch(wxCommandEvent &) { RefreshExplorerSearch(); }
 
-    void OnExplorerSearchEnter(wxCommandEvent &) { OpenSelectedExplorerSearchResult(); }
+    void OnExplorerSearchEnter(wxCommandEvent &) { OpenExplorerSelectionFromSearch(); }
 
     void OnExplorerSearchKeyDown(wxKeyEvent &event) {
+        if (!ExplorerSearchHasFocus()) {
+            event.Skip();
+            return;
+        }
+
         switch (event.GetKeyCode()) {
             case WXK_UP:
-                MoveExplorerSearchSelection(-1);
-                return;
+                if (MoveExplorerSelectionFromSearch(-1)) return;
+                break;
             case WXK_DOWN:
-                MoveExplorerSearchSelection(1);
-                return;
+                if (MoveExplorerSelectionFromSearch(1)) return;
+                break;
             case WXK_RETURN:
             case WXK_NUMPAD_ENTER:
-                if (OpenSelectedExplorerSearchResult()) return;
+                if (OpenExplorerSelectionFromSearch()) return;
                 break;
         }
         event.Skip();
@@ -1868,82 +2076,616 @@ struct TSFrame : wxFrame {
         }
     }
 
+    vector<pair<wxString, wxString>> ToolbarSectionDefinitions() const {
+        return {{"filetb", _("File")},
+                {"edittb", _("Edit")},
+                {"viewtb", _("View")},
+                {"browsetb", _("Browse")},
+                {"structuretb", _("Structure")},
+                {"rendertb", _("Render")},
+                {"formattb", _("Text format")},
+                {"cellcolortb", _("Cell color")},
+                {"textcolortb", _("Text color")},
+                {"bordercolortb", _("Border color")},
+                {"imagetb", _("Image")},
+                {"findtb", _("Search")},
+                {"repltb", _("Replace")}};
+    }
+
+    std::set<wxString> HiddenToolbarSections() const {
+        wxString hiddenconfig;
+        sys->cfg->Read("toolbarhiddenpanes", &hiddenconfig, "");
+        auto names = wxStringTokenize(hiddenconfig, "|", wxTOKEN_STRTOK);
+        std::set<wxString> hidden;
+        for (const auto &name : names) {
+            if (!name.IsEmpty()) hidden.insert(name);
+        }
+        return hidden;
+    }
+
+    void ApplyToolbarVisibility() {
+        auto hidden = HiddenToolbarSections();
+        for (const auto &section : ToolbarSectionDefinitions()) {
+            auto &pane = aui.GetPane(section.first);
+            if (!pane.IsOk()) continue;
+            pane.Show(sys->showtoolbar && !hidden.count(section.first));
+        }
+    }
+
+    bool PerspectiveHasCurrentToolbarLayout(const wxString &perspective) const {
+        if (perspective.IsEmpty()) return false;
+        for (const auto &section : ToolbarSectionDefinitions()) {
+            if (perspective.Find(section.first) == wxNOT_FOUND) return false;
+        }
+        return true;
+    }
+
+    void LoadSavedPerspective() {
+        wxString perspective = sys->cfg->Read("perspective", "");
+        int savedversion = 0;
+        sys->cfg->Read("toolbarlayoutversion", &savedversion, 0);
+        if (savedversion == toolbarlayoutversion &&
+            PerspectiveHasCurrentToolbarLayout(perspective)) {
+            aui.LoadPerspective(perspective);
+        } else {
+            sys->cfg->Write("perspective", "");
+            sys->cfg->Write("toolbarhiddenpanes", "");
+            sys->cfg->Write("toolbarlayoutversion", toolbarlayoutversion);
+        }
+        ApplyToolbarVisibility();
+    }
+
+    void RefreshToolBarKeepingPerspective() {
+        auto perspective = aui.SavePerspective();
+        RefreshToolBar();
+        aui.LoadPerspective(perspective);
+        ApplyToolbarVisibility();
+    }
+
+    wxString ToolbarTooltip(int action, const wxString &tooltip) const {
+        auto it = menuaccelerators.find(action);
+        if (it == menuaccelerators.end() || it->second.IsEmpty()) return tooltip;
+        if (tooltip.Upper().Find(it->second.Upper()) != wxNOT_FOUND) return tooltip;
+        return tooltip + "\n" + _("Shortcut: ") + it->second;
+    }
+
+    void CustomizeToolbar() {
+        auto sections = ToolbarSectionDefinitions();
+        auto hidden = HiddenToolbarSections();
+        wxArrayString choices;
+        wxArrayInt selections;
+        for (size_t i = 0; i < sections.size(); i++) {
+            choices.Add(sections[i].second);
+            if (!hidden.count(sections[i].first)) selections.Add(static_cast<int>(i));
+        }
+
+        wxMultiChoiceDialog dialog(this, _("Select toolbar sections to show:"),
+                                   _("Customize toolbar"), choices);
+        dialog.SetSelections(selections);
+        if (dialog.ShowModal() != wxID_OK) return;
+
+        std::set<int> selected;
+        auto selectedindices = dialog.GetSelections();
+        for (size_t i = 0; i < selectedindices.GetCount(); i++) {
+            selected.insert(selectedindices[i]);
+        }
+
+        wxString newhidden;
+        for (size_t i = 0; i < sections.size(); i++) {
+            if (selected.count(static_cast<int>(i))) continue;
+            if (!newhidden.IsEmpty()) newhidden += "|";
+            newhidden += sections[i].first;
+        }
+        sys->cfg->Write("toolbarhiddenpanes", newhidden);
+        sys->cfg->Write("showtoolbar", sys->showtoolbar = true);
+        if (GetMenuBar()) GetMenuBar()->Check(A_SHOWTBAR, true);
+        ApplyToolbarVisibility();
+        aui.Update();
+    }
+
     void RefreshToolBar() {
         for (const auto &name : GetToolbarPaneNames()) { DestroyToolbarPane(name); }
         auto iconpath = app->GetDataPath("images/material/toolbar/");
+        auto hiddentoolbarsections = HiddenToolbarSections();
+        auto toolbarstyle = wxAUI_TB_DEFAULT_STYLE | wxAUI_TB_PLAIN_BACKGROUND;
+
+        auto NewToolbar = [&]() {
+            auto tb = new wxAuiToolBar(this, wxID_ANY, wxDefaultPosition, wxDefaultSize,
+                                       toolbarstyle);
+            tb->SetToolBitmapSize(FromDIP(wxSize(24, 24)));
+            return tb;
+        };
+
         auto AddToolbarIcon = [&](wxAuiToolBar *tb, const wxChar *name, int action,
-                                  wxString iconpath, wxString lighticon, wxString darkicon) {
+                                  wxString lighticon, wxString darkicon) {
+            auto tooltip = ToolbarTooltip(action, name);
             tb->AddTool(
                 action, name,
                 wxBitmapBundle::FromSVGFile(
                     iconpath + (wxSystemSettings::GetAppearance().IsDark() ? darkicon : lighticon),
                     wxSize(24, 24)),
-                name, wxITEM_NORMAL);
+                tooltip, wxITEM_NORMAL);
         };
 
-        auto filetb = new wxAuiToolBar(this, wxID_ANY, wxDefaultPosition, wxDefaultSize,
-                                       wxAUI_TB_DEFAULT_STYLE | wxAUI_TB_PLAIN_BACKGROUND);
-        AddToolbarIcon(filetb, _("New (CTRL+n)"), wxID_NEW, iconpath, "filenew.svg",
-                       "filenew_dark.svg");
-        AddToolbarIcon(filetb, _("Open (CTRL+o)"), wxID_OPEN, iconpath, "fileopen.svg",
+        auto MakeTextToolBitmap = [&](const wxString &label, bool bold = false,
+                                      bool italic = false, bool underline = false,
+                                      bool strikethrough = false) {
+            const auto size = FromDIP(24);
+            wxBitmap bitmap(size, size);
+            wxMemoryDC dc(bitmap);
+            auto bg = wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE);
+            auto fg = wxSystemSettings::GetColour(wxSYS_COLOUR_BTNTEXT);
+            auto border = wxSystemSettings::GetColour(wxSYS_COLOUR_BTNSHADOW);
+            dc.SetBackground(wxBrush(bg));
+            dc.Clear();
+            dc.SetPen(wxPen(border));
+            dc.SetBrush(*wxTRANSPARENT_BRUSH);
+            dc.DrawRoundedRectangle(FromDIP(2), FromDIP(2), size - FromDIP(4),
+                                    size - FromDIP(4), FromDIP(2));
+            auto font = GetFont();
+            font.SetPointSize(8);
+            font.SetWeight(bold ? wxFONTWEIGHT_BOLD : wxFONTWEIGHT_NORMAL);
+            font.SetStyle(italic ? wxFONTSTYLE_ITALIC : wxFONTSTYLE_NORMAL);
+            font.SetUnderlined(underline);
+            dc.SetFont(font);
+            dc.SetTextForeground(fg);
+            wxCoord tw = 0;
+            wxCoord th = 0;
+            dc.GetTextExtent(label, &tw, &th);
+            dc.DrawText(label, (size - tw) / 2, (size - th) / 2);
+            if (strikethrough) {
+                dc.SetPen(wxPen(fg));
+                dc.DrawLine(FromDIP(5), size / 2, size - FromDIP(5), size / 2);
+            }
+            dc.SelectObject(wxNullBitmap);
+            return wxBitmapBundle::FromBitmap(bitmap);
+        };
+
+        auto MakePngToolBitmap = [&](const wxString &filename, const wxString &fallback) {
+            wxImage image;
+            if (image.LoadFile(imagepath + filename, wxBITMAP_TYPE_PNG) && image.IsOk()) {
+                image.Rescale(FromDIP(24), FromDIP(24), wxIMAGE_QUALITY_HIGH);
+                return wxBitmapBundle::FromBitmap(wxBitmap(image));
+            }
+            return MakeTextToolBitmap(fallback);
+        };
+
+        enum class ToolbarGlyph {
+            SaveAll,
+            Redo,
+            PasteStyle,
+            DeleteAfter,
+            WidthIncrease,
+            WidthDecrease,
+            WidthReset,
+            OpenFile,
+            OpenBrowser,
+            GridNxN,
+            Wrap,
+            Merge,
+            Split,
+            Fold,
+            FoldAll,
+            UnfoldAll,
+            RenderGrid,
+            RenderBubble,
+            RenderLine,
+            VerticalGrid,
+            VerticalBubble,
+            VerticalLine,
+            HorizontalGrid,
+            HorizontalBubble,
+            HorizontalLine,
+            OneLayer,
+            Typewriter,
+            ResetStyle,
+            ResetSize,
+            DisplayScale,
+            OneToOne,
+            SaveImage,
+            PreviousSearch,
+        };
+
+        auto MakeGlyphToolBitmap = [&](ToolbarGlyph glyph) {
+            const auto size = FromDIP(24);
+            auto bg = wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE);
+            auto fg = wxSystemSettings::GetColour(wxSYS_COLOUR_BTNTEXT);
+            wxBitmap bitmap(size, size);
+            wxMemoryDC dc(bitmap);
+            dc.SetBackground(wxBrush(bg));
+            dc.Clear();
+
+            auto D = [&](int v) { return FromDIP(v); };
+            auto Pen = [&](int width = 2) {
+                auto penwidth = D(width);
+                dc.SetPen(wxPen(fg, penwidth < 1 ? 1 : penwidth, wxPENSTYLE_SOLID));
+                dc.SetBrush(*wxTRANSPARENT_BRUSH);
+            };
+            auto Brush = [&]() {
+                auto penwidth = D(1);
+                dc.SetPen(wxPen(fg, penwidth < 1 ? 1 : penwidth, wxPENSTYLE_SOLID));
+                dc.SetBrush(wxBrush(fg));
+            };
+            auto Line = [&](int x1, int y1, int x2, int y2, int width = 2) {
+                Pen(width);
+                dc.DrawLine(D(x1), D(y1), D(x2), D(y2));
+            };
+            auto Rect = [&](int x, int y, int w, int h, int width = 2) {
+                Pen(width);
+                dc.DrawRectangle(D(x), D(y), D(w), D(h));
+            };
+            auto FillRect = [&](int x, int y, int w, int h) {
+                Brush();
+                dc.DrawRectangle(D(x), D(y), D(w), D(h));
+            };
+            auto Circle = [&](int x, int y, int r, int width = 2) {
+                Pen(width);
+                dc.DrawCircle(D(x), D(y), D(r));
+            };
+            auto Plus = [&](int x, int y) {
+                Line(x - 3, y, x + 4, y);
+                Line(x, y - 3, x, y + 4);
+            };
+            auto Minus = [&](int x, int y) { Line(x - 4, y, x + 5, y); };
+            auto Cross = [&](int x, int y) {
+                Line(x - 4, y - 4, x + 5, y + 5);
+                Line(x + 5, y - 4, x - 4, y + 5);
+            };
+            auto ArrowRight = [&](int x1, int y, int x2) {
+                Line(x1, y, x2, y);
+                Line(x2 - 4, y - 4, x2, y);
+                Line(x2 - 4, y + 4, x2, y);
+            };
+            auto ArrowLeft = [&](int x1, int y, int x2) {
+                Line(x1, y, x2, y);
+                Line(x1 + 4, y - 4, x1, y);
+                Line(x1 + 4, y + 4, x1, y);
+            };
+            auto ArrowDown = [&](int x, int y1, int y2) {
+                Line(x, y1, x, y2);
+                Line(x - 4, y2 - 4, x, y2);
+                Line(x + 4, y2 - 4, x, y2);
+            };
+            auto Grid = [&](int x, int y, int w, int h) {
+                Rect(x, y, w, h, 1);
+                Line(x + w / 3, y, x + w / 3, y + h, 1);
+                Line(x + 2 * w / 3, y, x + 2 * w / 3, y + h, 1);
+                Line(x, y + h / 3, x + w, y + h / 3, 1);
+                Line(x, y + 2 * h / 3, x + w, y + 2 * h / 3, 1);
+            };
+
+            switch (glyph) {
+                case ToolbarGlyph::SaveAll:
+                    Rect(5, 4, 10, 12);
+                    Rect(9, 8, 10, 12);
+                    Line(11, 12, 17, 12, 1);
+                    Line(11, 15, 17, 15, 1);
+                    break;
+                case ToolbarGlyph::Redo:
+                    Line(7, 6, 15, 6);
+                    Line(15, 6, 15, 12);
+                    ArrowLeft(6, 12, 15);
+                    break;
+                case ToolbarGlyph::PasteStyle:
+                    Rect(6, 5, 9, 12);
+                    Line(9, 4, 12, 4);
+                    Line(8, 8, 13, 8, 1);
+                    Line(14, 18, 19, 13);
+                    Line(16, 12, 20, 16);
+                    break;
+                case ToolbarGlyph::DeleteAfter:
+                    Line(6, 7, 18, 7);
+                    Line(10, 5, 14, 5);
+                    Rect(8, 8, 8, 11);
+                    Line(10, 10, 10, 17, 1);
+                    Line(14, 10, 14, 17, 1);
+                    break;
+                case ToolbarGlyph::WidthIncrease:
+                    ArrowLeft(4, 9, 12);
+                    ArrowRight(12, 9, 20);
+                    Plus(12, 17);
+                    break;
+                case ToolbarGlyph::WidthDecrease:
+                    ArrowRight(4, 9, 10);
+                    ArrowLeft(14, 9, 20);
+                    Minus(12, 17);
+                    break;
+                case ToolbarGlyph::WidthReset:
+                    ArrowLeft(4, 8, 12);
+                    ArrowRight(12, 8, 20);
+                    Cross(12, 17);
+                    break;
+                case ToolbarGlyph::OpenFile:
+                    Rect(4, 7, 16, 12);
+                    Line(4, 7, 9, 7, 1);
+                    Line(9, 7, 11, 10, 1);
+                    Line(11, 10, 20, 10, 1);
+                    ArrowRight(9, 15, 18);
+                    break;
+                case ToolbarGlyph::OpenBrowser:
+                    Circle(12, 12, 8);
+                    Line(4, 12, 20, 12, 1);
+                    Line(12, 4, 12, 20, 1);
+                    Pen(1);
+                    dc.DrawArc(D(8), D(5), D(8), D(19), D(12), D(12));
+                    dc.DrawArc(D(16), D(5), D(16), D(19), D(12), D(12));
+                    ArrowRight(13, 17, 21);
+                    break;
+                case ToolbarGlyph::GridNxN:
+                    Grid(4, 4, 14, 14);
+                    Plus(18, 18);
+                    break;
+                case ToolbarGlyph::Wrap:
+                    Rect(5, 6, 14, 11);
+                    Rect(8, 9, 8, 5, 1);
+                    ArrowDown(12, 2, 7);
+                    break;
+                case ToolbarGlyph::Merge:
+                    Rect(4, 7, 7, 10, 1);
+                    Rect(13, 7, 7, 10, 1);
+                    ArrowRight(5, 12, 11);
+                    ArrowLeft(13, 12, 19);
+                    break;
+                case ToolbarGlyph::Split:
+                    Rect(5, 6, 14, 12);
+                    Line(12, 6, 12, 18, 1);
+                    ArrowLeft(4, 12, 10);
+                    ArrowRight(14, 12, 20);
+                    break;
+                case ToolbarGlyph::Fold:
+                    Rect(5, 5, 14, 14);
+                    Minus(12, 12);
+                    break;
+                case ToolbarGlyph::FoldAll:
+                    Rect(4, 4, 12, 12, 1);
+                    Rect(8, 8, 12, 12, 1);
+                    Minus(14, 14);
+                    break;
+                case ToolbarGlyph::UnfoldAll:
+                    Rect(4, 4, 12, 12, 1);
+                    Rect(8, 8, 12, 12, 1);
+                    Plus(14, 14);
+                    break;
+                case ToolbarGlyph::RenderGrid:
+                    Grid(5, 5, 14, 14);
+                    break;
+                case ToolbarGlyph::RenderBubble:
+                    Circle(7, 8, 3, 1);
+                    Circle(16, 8, 3, 1);
+                    Circle(12, 16, 3, 1);
+                    Line(9, 9, 14, 9, 1);
+                    Line(8, 11, 11, 14, 1);
+                    Line(15, 11, 13, 14, 1);
+                    break;
+                case ToolbarGlyph::RenderLine:
+                    Circle(12, 5, 2, 1);
+                    Circle(7, 17, 2, 1);
+                    Circle(17, 17, 2, 1);
+                    Line(12, 7, 12, 12, 1);
+                    Line(7, 12, 17, 12, 1);
+                    Line(7, 12, 7, 15, 1);
+                    Line(17, 12, 17, 15, 1);
+                    break;
+                case ToolbarGlyph::VerticalGrid:
+                    Rect(7, 4, 10, 5, 1);
+                    Rect(7, 10, 10, 5, 1);
+                    Rect(7, 16, 10, 5, 1);
+                    break;
+                case ToolbarGlyph::VerticalBubble:
+                    Circle(12, 5, 2, 1);
+                    Circle(12, 12, 2, 1);
+                    Circle(12, 19, 2, 1);
+                    Line(12, 7, 12, 10, 1);
+                    Line(12, 14, 12, 17, 1);
+                    break;
+                case ToolbarGlyph::VerticalLine:
+                    Rect(7, 4, 10, 4, 1);
+                    Line(12, 8, 12, 12, 1);
+                    Rect(7, 12, 10, 4, 1);
+                    Line(12, 16, 12, 20, 1);
+                    Line(8, 20, 16, 20, 1);
+                    break;
+                case ToolbarGlyph::HorizontalGrid:
+                    Rect(4, 7, 5, 10, 1);
+                    Rect(10, 7, 5, 10, 1);
+                    Rect(16, 7, 5, 10, 1);
+                    break;
+                case ToolbarGlyph::HorizontalBubble:
+                    Circle(5, 12, 2, 1);
+                    Circle(12, 12, 2, 1);
+                    Circle(19, 12, 2, 1);
+                    Line(7, 12, 10, 12, 1);
+                    Line(14, 12, 17, 12, 1);
+                    break;
+                case ToolbarGlyph::HorizontalLine:
+                    Rect(4, 7, 4, 10, 1);
+                    Line(8, 12, 12, 12, 1);
+                    Rect(12, 7, 4, 10, 1);
+                    Line(16, 12, 20, 12, 1);
+                    Line(20, 8, 20, 16, 1);
+                    break;
+                case ToolbarGlyph::OneLayer:
+                    Line(6, 8, 18, 5, 1);
+                    Line(6, 12, 18, 9, 1);
+                    Line(6, 16, 18, 13, 1);
+                    FillRect(7, 7, 10, 2);
+                    break;
+                case ToolbarGlyph::Typewriter:
+                    Rect(4, 7, 16, 11);
+                    Line(7, 10, 17, 10, 1);
+                    Line(7, 13, 17, 13, 1);
+                    Line(8, 16, 16, 16, 1);
+                    break;
+                case ToolbarGlyph::ResetStyle:
+                    Line(7, 18, 12, 5);
+                    Line(12, 5, 17, 18);
+                    Line(9, 13, 15, 13, 1);
+                    Line(5, 5, 19, 19);
+                    break;
+                case ToolbarGlyph::ResetSize:
+                    Line(6, 18, 10, 8);
+                    Line(10, 8, 14, 18);
+                    Line(14, 18, 18, 5);
+                    ArrowRight(14, 6, 20);
+                    break;
+                case ToolbarGlyph::DisplayScale:
+                    Rect(5, 5, 14, 14);
+                    Line(8, 15, 11, 12, 1);
+                    Line(11, 12, 14, 14, 1);
+                    ArrowRight(12, 8, 18);
+                    ArrowDown(16, 6, 12);
+                    break;
+                case ToolbarGlyph::OneToOne:
+                    Rect(6, 6, 12, 12);
+                    Rect(9, 9, 6, 6, 1);
+                    Line(5, 3, 8, 3, 1);
+                    Line(3, 5, 3, 8, 1);
+                    Line(16, 21, 19, 21, 1);
+                    Line(21, 16, 21, 19, 1);
+                    break;
+                case ToolbarGlyph::SaveImage:
+                    Rect(5, 5, 14, 11);
+                    Circle(9, 9, 2, 1);
+                    Line(7, 15, 11, 12, 1);
+                    Line(11, 12, 15, 15, 1);
+                    ArrowDown(12, 15, 21);
+                    break;
+                case ToolbarGlyph::PreviousSearch:
+                    Circle(10, 10, 5);
+                    Line(14, 14, 19, 19);
+                    ArrowLeft(4, 18, 12);
+                    break;
+            }
+
+            dc.SelectObject(wxNullBitmap);
+            return wxBitmapBundle::FromBitmap(bitmap);
+        };
+
+        auto AddTextTool = [&](wxAuiToolBar *tb, const wxString &label, int action,
+                               const wxString &tooltip, bool bold = false,
+                               bool italic = false, bool underline = false,
+                               bool strikethrough = false,
+                               wxItemKind kind = wxITEM_NORMAL) {
+            tb->AddTool(action, tooltip,
+                        MakeTextToolBitmap(label, bold, italic, underline, strikethrough),
+                        ToolbarTooltip(action, tooltip), kind);
+        };
+
+        auto AddGlyphTool = [&](wxAuiToolBar *tb, ToolbarGlyph glyph, int action,
+                                const wxString &tooltip,
+                                wxItemKind kind = wxITEM_NORMAL) {
+            tb->AddTool(action, tooltip, MakeGlyphToolBitmap(glyph),
+                        ToolbarTooltip(action, tooltip), kind);
+        };
+
+        auto AddPngTool = [&](wxAuiToolBar *tb, const wxString &name, int action,
+                              const wxString &filename, const wxString &fallback) {
+            tb->AddTool(action, name, MakePngToolBitmap(filename, fallback),
+                        ToolbarTooltip(action, name), wxITEM_NORMAL);
+        };
+
+        auto AddToolbarPane = [&](wxAuiToolBar *tb, const wxString &name,
+                                  const wxString &caption, int row) {
+            tb->Realize();
+            auto paneinfo = wxAuiPaneInfo()
+                                .Name(name)
+                                .Caption(caption)
+                                .ToolbarPane()
+                                .Top()
+                                .Row(row)
+                                .LeftDockable(false)
+                                .RightDockable(false)
+                                .Gripper(true);
+            if (!sys->showtoolbar || hiddentoolbarsections.count(name)) paneinfo.Hide();
+            aui.AddPane(tb, paneinfo);
+        };
+
+        auto filetb = NewToolbar();
+        AddToolbarIcon(filetb, _("New (CTRL+n)"), wxID_NEW, "filenew.svg", "filenew_dark.svg");
+        AddToolbarIcon(filetb, _("Open (CTRL+o)"), wxID_OPEN, "fileopen.svg",
                        "fileopen_dark.svg");
-        AddToolbarIcon(filetb, _("Save (CTRL+s)"), wxID_SAVE, iconpath, "filesave.svg",
+        AddToolbarIcon(filetb, _("Save (CTRL+s)"), wxID_SAVE, "filesave.svg",
                        "filesave_dark.svg");
-        AddToolbarIcon(filetb, _("Save as..."), wxID_SAVEAS, iconpath, "filesaveas.svg",
+        AddToolbarIcon(filetb, _("Save as..."), wxID_SAVEAS, "filesaveas.svg",
                        "filesaveas_dark.svg");
-        filetb->Realize();
+        AddGlyphTool(filetb, ToolbarGlyph::SaveAll, A_SAVEALL, _("Save all open documents"));
 
-        auto edittb = new wxAuiToolBar(this, wxID_ANY, wxDefaultPosition, wxDefaultSize,
-                                       wxAUI_TB_DEFAULT_STYLE | wxAUI_TB_PLAIN_BACKGROUND);
-        AddToolbarIcon(edittb, _("Undo (CTRL+z)"), wxID_UNDO, iconpath, "undo.svg",
-                       "undo_dark.svg");
-        AddToolbarIcon(edittb, _("Copy (CTRL+c)"), wxID_COPY, iconpath, "editcopy.svg",
+        auto edittb = NewToolbar();
+        AddToolbarIcon(edittb, _("Undo (CTRL+z)"), wxID_UNDO, "undo.svg", "undo_dark.svg");
+        AddGlyphTool(edittb, ToolbarGlyph::Redo, wxID_REDO, _("Redo (CTRL+y)"));
+        AddToolbarIcon(edittb, _("Copy (CTRL+c)"), wxID_COPY, "editcopy.svg",
                        "editcopy_dark.svg");
-        AddToolbarIcon(edittb, _("Paste (CTRL+v)"), wxID_PASTE, iconpath, "editpaste.svg",
+        AddToolbarIcon(edittb, _("Paste (CTRL+v)"), wxID_PASTE, "editpaste.svg",
                        "editpaste_dark.svg");
-        edittb->Realize();
+        AddGlyphTool(edittb, ToolbarGlyph::PasteStyle, A_PASTESTYLE, _("Paste style only"));
+        AddGlyphTool(edittb, ToolbarGlyph::DeleteAfter, A_DELETE,
+                     _("Delete after selection (DEL)"));
 
-        auto zoomtb = new wxAuiToolBar(this, wxID_ANY, wxDefaultPosition, wxDefaultSize,
-                                       wxAUI_TB_DEFAULT_STYLE | wxAUI_TB_PLAIN_BACKGROUND);
-        AddToolbarIcon(zoomtb, _("Zoom In (CTRL+mousewheel)"), A_ZOOMIN, iconpath, "zoomin.svg",
+        auto viewtb = NewToolbar();
+        AddToolbarIcon(viewtb, _("Zoom In (CTRL+mousewheel)"), A_ZOOMIN, "zoomin.svg",
                        "zoomin_dark.svg");
-        AddToolbarIcon(zoomtb, _("Zoom Out (CTRL+mousewheel)"), A_ZOOMOUT, iconpath, "zoomout.svg",
+        AddToolbarIcon(viewtb, _("Zoom Out (CTRL+mousewheel)"), A_ZOOMOUT, "zoomout.svg",
                        "zoomout_dark.svg");
-        zoomtb->Realize();
+        AddGlyphTool(viewtb, ToolbarGlyph::WidthIncrease, A_INCWIDTH,
+                     _("Increase column width"));
+        AddGlyphTool(viewtb, ToolbarGlyph::WidthDecrease, A_DECWIDTH,
+                     _("Decrease column width"));
+        AddGlyphTool(viewtb, ToolbarGlyph::WidthReset, A_RESETWIDTH,
+                     _("Reset column widths"));
 
-        auto celltb = new wxAuiToolBar(this, wxID_ANY, wxDefaultPosition, wxDefaultSize,
-                                       wxAUI_TB_DEFAULT_STYLE | wxAUI_TB_PLAIN_BACKGROUND);
-        AddToolbarIcon(celltb, _("New Grid (INS)"), A_ENTERGRID, iconpath, "newgrid.svg",
+        auto browsetb = NewToolbar();
+        AddGlyphTool(browsetb, ToolbarGlyph::OpenFile, A_BROWSEF,
+                     _("Open file from selected cell text (F4)"));
+        AddGlyphTool(browsetb, ToolbarGlyph::OpenBrowser, A_BROWSE,
+                     _("Open link in browser from selected cell text (F5)"));
+
+        auto structuretb = NewToolbar();
+        AddToolbarIcon(structuretb, _("New Grid (INS)"), A_ENTERGRID, "newgrid.svg",
                        "newgrid_dark.svg");
-        AddToolbarIcon(celltb, _("Add Image"), A_IMAGE, iconpath, "image.svg", "image_dark.svg");
-        AddToolbarIcon(celltb, _("Run"), wxID_EXECUTE, iconpath, "run.svg", "run_dark.svg");
-        celltb->Realize();
+        AddGlyphTool(structuretb, ToolbarGlyph::GridNxN, A_ENTERGRIDN,
+                     _("Insert new NxN grid"));
+        AddGlyphTool(structuretb, ToolbarGlyph::Wrap, A_WRAP, _("Wrap in new parent (F9)"));
+        AddGlyphTool(structuretb, ToolbarGlyph::Merge, A_MERGECELLS,
+                     _("Merge selected cells"));
+        AddGlyphTool(structuretb, ToolbarGlyph::Split, A_UNMERGECELLS,
+                     _("Unmerge selected cells"));
+        AddGlyphTool(structuretb, ToolbarGlyph::Fold, A_FOLD, _("Toggle fold"));
+        AddGlyphTool(structuretb, ToolbarGlyph::FoldAll, A_FOLDALL,
+                     _("Fold all recursively"));
+        AddGlyphTool(structuretb, ToolbarGlyph::UnfoldAll, A_UNFOLDALL,
+                     _("Unfold all recursively"));
 
-        auto findtb = new wxAuiToolBar(this, wxID_ANY, wxDefaultPosition, wxDefaultSize,
-                                       wxAUI_TB_DEFAULT_STYLE | wxAUI_TB_PLAIN_BACKGROUND);
-        findtb->AddControl(new wxStaticText(findtb, wxID_ANY, _("Search ")));
-        findtb->AddControl(filter = new wxTextCtrl(findtb, A_SEARCH, "", wxDefaultPosition,
-                                                   FromDIP(wxSize(80, 22)),
-                                                   wxWANTS_CHARS | wxTE_PROCESS_ENTER));
-        AddToolbarIcon(findtb, _("Clear search"), A_CLEARSEARCH, iconpath, "cancel.svg",
-                       "cancel_dark.svg");
-        AddToolbarIcon(findtb, _("Go to Next Search Result"), A_SEARCHNEXT, iconpath, "search.svg",
-                       "search_dark.svg");
-        findtb->Realize();
+        auto rendertb = NewToolbar();
+        AddGlyphTool(rendertb, ToolbarGlyph::RenderGrid, A_GS, _("Grid style rendering"));
+        AddGlyphTool(rendertb, ToolbarGlyph::RenderBubble, A_BS,
+                     _("Bubble style rendering"));
+        AddGlyphTool(rendertb, ToolbarGlyph::RenderLine, A_LS, _("Line style rendering"));
+        AddGlyphTool(rendertb, ToolbarGlyph::VerticalGrid, A_V_GS,
+                     _("Vertical grid layout"));
+        AddGlyphTool(rendertb, ToolbarGlyph::VerticalBubble, A_V_BS,
+                     _("Vertical bubble layout"));
+        AddGlyphTool(rendertb, ToolbarGlyph::VerticalLine, A_V_LS,
+                     _("Vertical line layout"));
+        AddGlyphTool(rendertb, ToolbarGlyph::HorizontalGrid, A_H_GS,
+                     _("Horizontal grid layout"));
+        AddGlyphTool(rendertb, ToolbarGlyph::HorizontalBubble, A_H_BS,
+                     _("Horizontal bubble layout"));
+        AddGlyphTool(rendertb, ToolbarGlyph::HorizontalLine, A_H_LS,
+                     _("Horizontal line layout"));
+        AddGlyphTool(rendertb, ToolbarGlyph::OneLayer, A_RENDERSTYLEONELAYER,
+                     _("Apply render style to selected layer only"), wxITEM_CHECK);
+        rendertb->ToggleTool(A_RENDERSTYLEONELAYER, sys->renderstyleonelayer);
 
-        auto repltb = new wxAuiToolBar(this, wxID_ANY, wxDefaultPosition, wxDefaultSize,
-                                       wxAUI_TB_DEFAULT_STYLE | wxAUI_TB_PLAIN_BACKGROUND);
-        repltb->AddControl(new wxStaticText(repltb, wxID_ANY, _("Replace ")));
-        repltb->AddControl(replaces = new wxTextCtrl(repltb, A_REPLACE, "", wxDefaultPosition,
-                                                     FromDIP(wxSize(80, 22)),
-                                                     wxWANTS_CHARS | wxTE_PROCESS_ENTER));
-        AddToolbarIcon(repltb, _("Clear replace"), A_CLEARREPLACE, iconpath, "cancel.svg",
-                       "cancel_dark.svg");
-        AddToolbarIcon(repltb, _("Replace in selection"), A_REPLACEONCE, iconpath, "replace.svg",
-                       "replace_dark.svg");
-        AddToolbarIcon(repltb, _("Replace All"), A_REPLACEALL, iconpath, "replaceall.svg",
-                       "replaceall_dark.svg");
-        repltb->Realize();
+        auto formattb = NewToolbar();
+        AddTextTool(formattb, "B", wxID_BOLD, _("Toggle bold"), true);
+        AddTextTool(formattb, "I", wxID_ITALIC, _("Toggle italic"), false, true);
+        AddTextTool(formattb, "U", wxID_UNDERLINE, _("Toggle underline"), false, false, true);
+        AddTextTool(formattb, "S", wxID_STRIKETHROUGH, _("Toggle strikethrough"), false, false,
+                    false, true);
+        AddGlyphTool(formattb, ToolbarGlyph::Typewriter, A_TT, _("Toggle typewriter"));
+        AddGlyphTool(formattb, ToolbarGlyph::ResetStyle, A_RESETSTYLE,
+                     _("Reset text styles"));
+        AddGlyphTool(formattb, ToolbarGlyph::ResetSize, A_RESETSIZE, _("Reset text sizes"));
 
         auto GetColorIndex = [&](int targetcolor, int defaultindex) {
             for (auto i = 1; i < celltextcolors.size(); ++i) {
@@ -1953,130 +2695,85 @@ struct TSFrame : wxFrame {
             return defaultindex;
         };
 
-        auto cellcolortb = new wxAuiToolBar(this, wxID_ANY, wxDefaultPosition, wxDefaultSize,
-                                            wxAUI_TB_DEFAULT_STYLE | wxAUI_TB_PLAIN_BACKGROUND);
+        auto cellcolortb = NewToolbar();
         cellcolortb->AddControl(new wxStaticText(cellcolortb, wxID_ANY, _("Cell ")));
-
         cellcolordropdown =
             new ColorDropdown(cellcolortb, A_CELLCOLOR, GetColorIndex(sys->lastcellcolor, 1));
         cellcolortb->AddControl(cellcolordropdown);
-        cellcolortb->Realize();
+        AddPngTool(cellcolortb, _("Apply last cell color"), A_LASTCELLCOLOR, "apply.png", "A");
+        AddPngTool(cellcolortb, _("Pick custom color"), A_CUSTCOL, "kcoloredit.png", "C");
 
-        auto textcolortb = new wxAuiToolBar(this, wxID_ANY, wxDefaultPosition, wxDefaultSize,
-                                            wxAUI_TB_DEFAULT_STYLE | wxAUI_TB_PLAIN_BACKGROUND);
+        auto textcolortb = NewToolbar();
         textcolortb->AddControl(new wxStaticText(textcolortb, wxID_ANY, _("Text ")));
         textcolordropdown =
             new ColorDropdown(textcolortb, A_TEXTCOLOR, GetColorIndex(sys->lasttextcolor, 2));
         textcolortb->AddControl(textcolordropdown);
-        textcolortb->Realize();
+        AddPngTool(textcolortb, _("Apply last text color"), A_LASTTEXTCOLOR, "apply.png", "A");
 
-        auto bordercolortb = new wxAuiToolBar(this, wxID_ANY, wxDefaultPosition, wxDefaultSize,
-                                              wxAUI_TB_DEFAULT_STYLE | wxAUI_TB_PLAIN_BACKGROUND);
+        auto bordercolortb = NewToolbar();
         bordercolortb->AddControl(new wxStaticText(bordercolortb, wxID_ANY, _("Border ")));
         bordercolordropdown =
             new ColorDropdown(bordercolortb, A_BORDCOLOR, GetColorIndex(sys->lastbordcolor, 7));
         bordercolortb->AddControl(bordercolordropdown);
-        bordercolortb->Realize();
+        AddPngTool(bordercolortb, _("Apply last border color"), A_LASTBORDCOLOR, "apply.png",
+                   "A");
+        AddToolbarIcon(bordercolortb, _("Reset colors"), A_RESETCOLOR, "cancel.svg",
+                       "cancel_dark.svg");
 
-        auto imagetb = new wxAuiToolBar(this, wxID_ANY, wxDefaultPosition, wxDefaultSize,
-                                        wxAUI_TB_DEFAULT_STYLE | wxAUI_TB_PLAIN_BACKGROUND);
+        auto imagetb = NewToolbar();
+        AddToolbarIcon(imagetb, _("Add Image"), A_IMAGE, "image.svg", "image_dark.svg");
         imagetb->AddControl(new wxStaticText(imagetb, wxID_ANY, _("Image ")));
         imagedropdown = new ImageDropdown(imagetb, imagepath);
         imagetb->AddControl(imagedropdown);
-        imagetb->Realize();
+        AddPngTool(imagetb, _("Insert last image"), A_LASTIMAGE, "apply.png", "A");
+        AddPngTool(imagetb, _("Remove selected image"), A_IMAGER, "edit_remove.png", "X");
+        AddGlyphTool(imagetb, ToolbarGlyph::DisplayScale, A_IMAGESCF,
+                     _("Scale display size without resampling"));
+        AddGlyphTool(imagetb, ToolbarGlyph::OneToOne, A_IMAGESCN, _("Reset display scale"));
+        AddGlyphTool(imagetb, ToolbarGlyph::SaveImage, A_IMAGESVA,
+                     _("Save selected image"));
+        AddToolbarIcon(imagetb, _("Run"), wxID_EXECUTE, "run.svg", "run_dark.svg");
 
-        aui.AddPane(filetb, wxAuiPaneInfo()
-                                .Name("filetb")
-                                .Caption("File operations")
-                                .ToolbarPane()
-                                .Top()
-                                .Row(0)
-                                .LeftDockable(false)
-                                .RightDockable(false)
-                                .Gripper(true));
-        aui.AddPane(edittb, wxAuiPaneInfo()
-                                .Name("edittb")
-                                .Caption("Edit operations")
-                                .ToolbarPane()
-                                .Top()
-                                .Row(0)
-                                .LeftDockable(false)
-                                .RightDockable(false)
-                                .Gripper(true));
-        aui.AddPane(zoomtb, wxAuiPaneInfo()
-                                .Name("zoomtb")
-                                .Caption("Zoom operations")
-                                .ToolbarPane()
-                                .Top()
-                                .Row(0)
-                                .LeftDockable(false)
-                                .RightDockable(false)
-                                .Gripper(true));
-        aui.AddPane(celltb, wxAuiPaneInfo()
-                                .Name("celltb")
-                                .Caption("Cell operations")
-                                .ToolbarPane()
-                                .Top()
-                                .Row(0)
-                                .LeftDockable(false)
-                                .RightDockable(false)
-                                .Gripper(true));
-        aui.AddPane(findtb, wxAuiPaneInfo()
-                                .Name("findtb")
-                                .Caption("Find operations")
-                                .ToolbarPane()
-                                .Top()
-                                .Row(0)
-                                .LeftDockable(false)
-                                .RightDockable(false)
-                                .Gripper(true));
-        aui.AddPane(repltb, wxAuiPaneInfo()
-                                .Name("repltb")
-                                .Caption("Replace operations")
-                                .ToolbarPane()
-                                .Top()
-                                .Row(0)
-                                .LeftDockable(false)
-                                .RightDockable(false)
-                                .Gripper(true));
-        aui.AddPane(cellcolortb, wxAuiPaneInfo()
-                                     .Name("cellcolortb")
-                                     .Caption("Cell color operations")
-                                     .ToolbarPane()
-                                     .Top()
-                                     .Row(0)
-                                     .LeftDockable(false)
-                                     .RightDockable(false)
-                                     .Gripper(true));
-        aui.AddPane(textcolortb, wxAuiPaneInfo()
-                                     .Name("textcolortb")
-                                     .Caption("Text color operations")
-                                     .ToolbarPane()
-                                     .Top()
-                                     .Row(0)
-                                     .LeftDockable(false)
-                                     .RightDockable(false)
-                                     .Gripper(true));
-        aui.AddPane(bordercolortb, wxAuiPaneInfo()
-                                       .Name("bordercolortb")
-                                       .Caption("Border color operations")
-                                       .ToolbarPane()
-                                       .Top()
-                                       .Row(0)
-                                       .LeftDockable(false)
-                                       .RightDockable(false)
-                                       .Gripper(true));
-        aui.AddPane(imagetb, wxAuiPaneInfo()
-                                 .Name("imagetb")
-                                 .Caption("Image operations")
-                                 .ToolbarPane()
-                                 .Top()
-                                 .Row(0)
-                                 .LeftDockable(false)
-                                 .RightDockable(false)
-                                 .Gripper(true));
+        auto findtb = NewToolbar();
+        findtb->AddControl(new wxStaticText(findtb, wxID_ANY, _("Search ")));
+        findtb->AddControl(filter = new wxTextCtrl(findtb, A_SEARCH, "", wxDefaultPosition,
+                                                   FromDIP(wxSize(140, 24)),
+                                                   wxWANTS_CHARS | wxTE_PROCESS_ENTER));
+        AddToolbarIcon(findtb, _("Clear search"), A_CLEARSEARCH, "cancel.svg", "cancel_dark.svg");
+        AddGlyphTool(findtb, ToolbarGlyph::PreviousSearch, A_SEARCHPREV,
+                     _("Go to previous search result"));
+        AddToolbarIcon(findtb, _("Next search result"), A_SEARCHNEXT, "search.svg",
+                       "search_dark.svg");
+
+        auto repltb = NewToolbar();
+        repltb->AddControl(new wxStaticText(repltb, wxID_ANY, _("Replace ")));
+        repltb->AddControl(replaces = new wxTextCtrl(repltb, A_REPLACE, "", wxDefaultPosition,
+                                                     FromDIP(wxSize(140, 24)),
+                                                     wxWANTS_CHARS | wxTE_PROCESS_ENTER));
+        AddToolbarIcon(repltb, _("Clear replace"), A_CLEARREPLACE, "cancel.svg",
+                       "cancel_dark.svg");
+        AddToolbarIcon(repltb, _("Replace in selection"), A_REPLACEONCE, "replace.svg",
+                       "replace_dark.svg");
+        AddToolbarIcon(repltb, _("Replace All"), A_REPLACEALL, "replaceall.svg",
+                       "replaceall_dark.svg");
+
+        AddToolbarPane(filetb, "filetb", "File operations", 0);
+        AddToolbarPane(edittb, "edittb", "Edit operations", 0);
+        AddToolbarPane(viewtb, "viewtb", "View operations", 0);
+        AddToolbarPane(browsetb, "browsetb", "Browse operations", 0);
+        AddToolbarPane(structuretb, "structuretb", "Structure operations", 0);
+        AddToolbarPane(rendertb, "rendertb", "Render operations", 1);
+        AddToolbarPane(formattb, "formattb", "Text format operations", 1);
+        AddToolbarPane(cellcolortb, "cellcolortb", "Cell color operations", 1);
+        AddToolbarPane(textcolortb, "textcolortb", "Text color operations", 1);
+        AddToolbarPane(bordercolortb, "bordercolortb", "Border color operations", 1);
+        AddToolbarPane(imagetb, "imagetb", "Image operations", 1);
+        AddToolbarPane(findtb, "findtb", "Find operations", 2);
+        AddToolbarPane(repltb, "repltb", "Replace operations", 2);
+
         auto artprovider = aui.GetArtProvider();
-        artprovider->SetColour(wxAUI_DOCKART_BACKGROUND_COLOUR, wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE));
+        artprovider->SetColour(wxAUI_DOCKART_BACKGROUND_COLOUR,
+                               wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE));
         artprovider->SetMetric(wxAUI_DOCKART_PANE_BORDER_SIZE, 0);
     }
 
@@ -2325,9 +3022,16 @@ struct TSFrame : wxFrame {
             case A_AUP: canvas->CursorScroll(0, -g_scrollratecursor); break;
             case A_ADOWN: canvas->CursorScroll(0, g_scrollratecursor); break;
             case A_RESETPERSPECTIVE:
+                sys->cfg->Write("perspective", "");
+                sys->cfg->Write("toolbarhiddenpanes", "");
+                sys->cfg->Write("toolbarlayoutversion", toolbarlayoutversion);
                 RefreshToolBar();
                 sys->showtoolbar = true;
+                ApplyToolbarVisibility();
                 aui.Update();
+                break;
+            case A_CUSTOMIZETOOLBAR:
+                CustomizeToolbar();
                 break;
             case A_SHOWSBAR:
                 if (!IsFullScreen()) {
@@ -2342,12 +3046,7 @@ struct TSFrame : wxFrame {
             case A_SHOWTBAR:
                 if (!IsFullScreen()) {
                     sys->cfg->Write("showtoolbar", sys->showtoolbar = ce.IsChecked());
-                    for (const auto &name : GetToolbarPaneNames()) {
-                        if (sys->showtoolbar)
-                            aui.GetPane(name).Show();
-                        else
-                            aui.GetPane(name).Hide();
-                    }
+                    ApplyToolbarVisibility();
                     aui.Update();
                 }
                 break;
@@ -2553,10 +3252,11 @@ struct TSFrame : wxFrame {
     void OnActivate(wxActivateEvent &ae) {
         // This causes warnings in the debug log, but without it keyboard entry upon window select
         // doesn't work.
+        if (ExplorerSearchHasFocus()) return;
         ReFocus();
     }
 
-    void OnGlobalShowHotKey(wxKeyEvent &) { ShowMainInterface(); }
+    void OnGlobalShowHotKey(wxKeyEvent &) { ShowMainInterface(true); }
 
     void OnSizing(wxSizeEvent &se) { se.Skip(); }
 
@@ -2675,6 +3375,7 @@ struct TSFrame : wxFrame {
         }
         sys->cfg->Write("notesizex", sys->notesizex);
         sys->cfg->Write("notesizey", sys->notesizey);
+        sys->cfg->Write("toolbarlayoutversion", toolbarlayoutversion);
         sys->cfg->Write("perspective", aui.SavePerspective());
         sys->cfg->Write("lastcellcolor", sys->lastcellcolor);
         sys->cfg->Write("lasttextcolor", sys->lasttextcolor);
@@ -2725,9 +3426,7 @@ struct TSFrame : wxFrame {
     void OnSysColourChanged(wxSysColourChangedEvent &se) {
         sys->colormask =
             (sys->followdarkmode && wxSystemSettings::GetAppearance().IsDark()) ? 0x00FFFFFF : 0;
-        auto perspective = aui.SavePerspective();
-        RefreshToolBar();
-        aui.LoadPerspective(perspective);
+        RefreshToolBarKeepingPerspective();
         aui.Update();
         se.Skip();
     }
@@ -2750,7 +3449,7 @@ struct TSFrame : wxFrame {
         ShowMainInterface();
     }
 
-    void ShowMainInterface() {
+    void ShowMainInterface(bool focus_explorer_search = false) {
         Show(true);
         if (IsIconized()) Iconize(false);
         UpdateTrayIcon();
@@ -2758,7 +3457,12 @@ struct TSFrame : wxFrame {
         #ifdef __WXMSW__
             if (GetHWND()) ::SetForegroundWindow((HWND)GetHWND());
         #endif
-        ReFocus();
+        if (focus_explorer_search) {
+            FocusExplorerSearch();
+            CallAfter([this] { FocusExplorerSearch(); });
+        } else {
+            ReFocus();
+        }
     }
 
     TSCanvas *GetCurrentTab() {
@@ -2788,6 +3492,7 @@ struct TSFrame : wxFrame {
         if (key.Length()) newcontents += "\t" + key;
         menu->Append(tag, newcontents, help);
         menustrings[item] = key;
+        if (key.Length()) menuaccelerators[tag] = key;
     }
 
     TSCanvas *NewTab(unique_ptr<Document> doc, bool append = false, int insert_at = -1) {

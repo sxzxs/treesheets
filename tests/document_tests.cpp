@@ -536,6 +536,31 @@ void TestHTMLExportEmbedsImagesAndNavigatesTextLinks() {
     treesheets::sys->loadimageids.clear();
 }
 
+void TestDeleteSelectedImageLeavesCellTextAndUndoRestoresImage() {
+    treesheets::sys->imagelist.clear();
+    treesheets::sys->loadimageids.clear();
+
+    treesheets::Document doc;
+    InitDocument(doc, MakeRoot(1, 1));
+    auto cell = doc.root->grid->C(0, 0).get();
+    cell->text.t = "caption";
+    doc.SetImageBM(cell, DocumentSampleImageBytes(), 'I', 1.0);
+    doc.SetSelect(doc.root->grid->FindCell(cell));
+    CHECK(doc.MarkSelectedImage());
+
+    CHECK_EQ(doc.Action(A_DELETE), wxString(""));
+    CHECK_EQ(cell->text.t, wxString("caption"));
+    CHECK(cell->text.image == nullptr);
+
+    doc.Undo(doc.undolist, doc.redolist);
+    cell = doc.root->grid->C(0, 0).get();
+    CHECK_EQ(cell->text.t, wxString("caption"));
+    CHECK(cell->text.image != nullptr);
+
+    treesheets::sys->imagelist.clear();
+    treesheets::sys->loadimageids.clear();
+}
+
 void TestHierarchifyAndFlattenRoundTripTable() {
     treesheets::Document doc;
     InitDocument(doc, MakeRoot(3, 3));
@@ -907,6 +932,7 @@ int main() {
     RUN_DOCUMENT_TEST(TestPasteHTMLFixturesHandleNestedTablesRichStylesLinksAndImages);
     RUN_DOCUMENT_TEST(TestExportFormatsEscapeTextAndPreserveStyles);
     RUN_DOCUMENT_TEST(TestHTMLExportEmbedsImagesAndNavigatesTextLinks);
+    RUN_DOCUMENT_TEST(TestDeleteSelectedImageLeavesCellTextAndUndoRestoresImage);
     RUN_DOCUMENT_TEST(TestHierarchifyAndFlattenRoundTripTable);
     RUN_DOCUMENT_TEST(TestWrapSelectionCreatesNestedGridAndUndoRestoresParent);
     RUN_DOCUMENT_TEST(TestHierarchySwapPromotesTagsAndDemotesParents);

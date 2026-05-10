@@ -1567,5 +1567,11 @@ struct Grid {
         }
     }
 
-    void ClearImages(const Selection &sel) { foreachcellinsel(c, sel) c->text.image = nullptr; }
+    void ClearImages(const Selection &sel) {
+        foreachcellinsel(c, sel) {
+            c->text.image = nullptr;
+            c->text.ResetImageScale();
+            c->text.WasEdited();
+        }
+    }
 };

@@ -1,4 +1,5 @@
 #include "stdafx.h"
+#include <IbPinyin/pinyin.hpp>
 
 static const auto TS_VERSION = 29;
 static const auto g_grid_margin = 1;
@@ -274,6 +275,7 @@ enum {
     A_DEFBGCOL,
     A_DEFCURCOL,
     A_RESETPERSPECTIVE,
+    A_CUSTOMIZETOOLBAR,
     A_THINSELC,
     A_COPYCT,
     A_COPYBM,

@@ -91,7 +91,8 @@ struct TSCanvas : public wxScrolledCanvas {
             return;  // for some reason, using just the "menu" key sends a right-click at (-1, -1)
         doc->isctrlshiftdrag = isctrlshift;
         doc->UpdateHover(dc, mx, my);
-        doc->SelectClick(right);
+        auto image_hit = doc->ImageCellAtDevicePoint(mx, my) != nullptr;
+        doc->SelectClick(right, image_hit);
         sys->frame->UpdateStatus(doc->selected, true);
         Refresh();
     }
@@ -227,6 +228,22 @@ struct TSCanvas : public wxScrolledCanvas {
             auto tagmenu = make_unique<wxMenu>();
             doc->RecreateTagMenu(*tagmenu);
             PopupMenu(tagmenu.get());
+        } else if (doc->SelectedImageCell()) {
+            wxMenu imagemenu;
+            imagemenu.Append(wxID_COPY, _("Copy Image"));
+            imagemenu.Append(wxID_CUT, _("Cut Image"));
+            imagemenu.Append(A_IMAGER, _("Remove Image"));
+            imagemenu.AppendSeparator();
+            imagemenu.Append(A_IMAGESVA, _("Save Image As..."));
+            imagemenu.Append(A_IMAGESCF, _("Scale Display Only..."));
+            imagemenu.Append(A_IMAGESCN, _("Reset Display Scale"));
+            imagemenu.AppendSeparator();
+            imagemenu.Append(A_IMAGESCP, _("Resample Pixels By %..."));
+            imagemenu.Append(A_IMAGESCW, _("Resample Pixels By Width..."));
+            imagemenu.AppendSeparator();
+            imagemenu.Append(A_SAVE_AS_JPEG, _("Embed as JPEG"));
+            imagemenu.Append(A_SAVE_AS_PNG, _("Embed as PNG"));
+            PopupMenu(&imagemenu);
         } else {
             PopupMenu(frame->editmenupopup);
         }
