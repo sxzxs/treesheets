@@ -223,7 +223,7 @@ struct Grid {
     bool UnmergeAll() {
         bool changed = false;
         foreachcell(c) {
-            if (c->mergexs != 1 || c->mergeys != 1) {
+            if (c && (c->mergexs != 1 || c->mergeys != 1)) {
                 c->mergexs = 1;
                 c->mergeys = 1;
                 changed = true;
@@ -418,12 +418,25 @@ struct Grid {
         }
         if (cell->drawstyle == DS_BLOBLINE && !tinyborder && cell->HasHeader() && !cell->tiny) {
             const int arcsize = 8;
+            const double pi = std::acos(-1.0);
             int srcy = by + cell->ycenteroff +
                        (cell->verticaltextandgrid ? cell->tys + 2 : cell->tys / 2) + g_margin_extra;
             // fixme: the 8 is chosen to fit the smallest text size, not very portable
             int srcx = bx + (cell->verticaltextandgrid ? 8 : cell->txs + 4) + g_margin_extra;
             int destyfirst = -1, destylast = -1;
-            dc.SetPen(*wxGREY_PEN);
+            dc.SetPen(wxPen(LightColor(bordercolor)));
+            auto drawcorner = [&](int centerx, int centery, double start, double end) {
+                constexpr int segments = 8;
+                wxPoint prev(static_cast<int>(std::lround(centerx + std::cos(start) * arcsize)),
+                             static_cast<int>(std::lround(centery + std::sin(start) * arcsize)));
+                for (int i = 1; i <= segments; i++) {
+                    double t = start + (end - start) * i / segments;
+                    wxPoint next(static_cast<int>(std::lround(centerx + std::cos(t) * arcsize)),
+                                 static_cast<int>(std::lround(centery + std::sin(t) * arcsize)));
+                    dc.DrawLine(prev, next);
+                    prev = next;
+                }
+            };
             foreachcelly(c) if (!IsCovered(0, y) && c->HasContent() && !c->tiny) {
                 int desty = c->ycenteroff + by + c->oy + c->tys / 2 + g_margin_extra;
                 int destx = bx + c->ox - 2 + g_margin_extra;
@@ -437,12 +450,11 @@ struct Grid {
                     if (desty < srcy) {
                         if (destyfirst < 0) destyfirst = desty + arcsize;
                         destylast = desty + arcsize;
-                        if (visible) dc.DrawBitmap(sys->frame->line_nw, srcx, desty, true);
+                        if (visible) drawcorner(srcx + arcsize, desty + arcsize, pi, pi * 1.5);
                     } else {
-                        destylast = desty - arcsize;
-                        if (visible)
-                            dc.DrawBitmap(sys->frame->line_sw, srcx, desty - arcsize, true);
                         desty--;
+                        destylast = desty - arcsize;
+                        if (visible) drawcorner(srcx + arcsize, desty - arcsize, pi, pi * 0.5);
                     }
                     if (visible) dc.DrawLine(srcx + arcsize, desty, destx, desty);
                 }
@@ -669,14 +681,18 @@ struct Grid {
             int oy = MapDeletedSegment(y, dy);
             for (int x = 0; x <= xs; x++) {
                 int ox = MapDeletedLine(x, dx);
-                VBorder(x, y) = oldv[ox + oy * (oldxs + 1)];
+                int oldi = ox + oy * (oldxs + 1);
+                if (oldi >= 0 && static_cast<size_t>(oldi) < oldv.size())
+                    VBorder(x, y) = oldv[oldi];
             }
         }
         for (int y = 0; y <= ys; y++) {
             int oy = MapDeletedLine(y, dy);
             for (int x = 0; x < xs; x++) {
                 int ox = MapDeletedSegment(x, dx);
-                HBorder(x, y) = oldh[ox + oy * oldxs];
+                int oldi = ox + oy * oldxs;
+                if (oldi >= 0 && static_cast<size_t>(oldi) < oldh.size())
+                    HBorder(x, y) = oldh[oldi];
             }
         }
     }
@@ -691,7 +707,10 @@ struct Grid {
             if (oy < 0) continue;
             for (int x = 0; x <= xs; x++) {
                 int ox = MapInsertedLine(x, dx, nxs);
-                if (ox >= 0) VBorder(x, y) = oldv[ox + oy * (oldxs + 1)];
+                if (ox < 0) continue;
+                int oldi = ox + oy * (oldxs + 1);
+                if (oldi >= 0 && static_cast<size_t>(oldi) < oldv.size())
+                    VBorder(x, y) = oldv[oldi];
             }
         }
         for (int y = 0; y <= ys; y++) {
@@ -699,7 +718,10 @@ struct Grid {
             if (oy < 0) continue;
             for (int x = 0; x < xs; x++) {
                 int ox = MapInsertedSegment(x, dx, nxs);
-                if (ox >= 0) HBorder(x, y) = oldh[ox + oy * oldxs];
+                if (ox < 0) continue;
+                int oldi = ox + oy * oldxs;
+                if (oldi >= 0 && static_cast<size_t>(oldi) < oldh.size())
+                    HBorder(x, y) = oldh[oldi];
             }
         }
     }
@@ -918,6 +940,35 @@ struct Grid {
 
     wxString ConvertToText(const Selection &sel, int indent, int format, Document *doc,
                            bool inheritstyle, Cell *root) {
+        if (format == A_EXPJSON) {
+            wxString json = JSONIndent(indent) + "{\n";
+            bool first = true;
+
+            JSONAppendField(json, indent + 2, "columns", wxString::Format("%d", sel.xs),
+                            first);
+            JSONAppendField(json, indent + 2, "rows", wxString::Format("%d", sel.ys), first);
+            JSONAppendField(json, indent + 2, "folded", JSONBool(folded), first);
+            JSONAppendField(json, indent + 2, "border_color", JSONColor(bordercolor), first);
+            JSONAppendField(json, indent + 2, "outer_spacing",
+                            wxString::Format("%d", user_grid_outer_spacing), first);
+
+            wxString rows = JSONIndent(indent + 2) + "[\n";
+            for (int yy = sel.y; yy < sel.y + sel.ys; yy++) {
+                if (yy != sel.y) rows += ",\n";
+                rows += JSONIndent(indent + 4) + "[\n";
+                for (int xx = sel.x; xx < sel.x + sel.xs; xx++) {
+                    if (xx != sel.x) rows += ",\n";
+                    rows += C(xx, yy)->ToText(indent + 6, sel, format, doc, inheritstyle, root);
+                }
+                rows += "\n" + JSONIndent(indent + 4) + "]";
+            }
+            rows += "\n" + JSONIndent(indent + 2) + "]";
+            JSONAppendField(json, indent + 2, "cells", rows, first);
+
+            json += "\n" + JSONIndent(indent) + "}";
+            return json;
+        }
+
         wxString r;
         const int root_grid_spacing = 2;  // Can't be adjusted in editor, so use a default.
         const int font_size = 14 - indent / 2;
@@ -1318,6 +1369,7 @@ struct Grid {
                     auto t = make_unique<Cell>(f, p);
                     t->text = p->text;
                     t->text.cell = t.get();
+                    t->text.ResetImageCache();
                     t->note = p->note;
                     t->grid = f->grid;
                     if (t->grid) t->grid->ReParent(t.get());
@@ -1400,8 +1452,8 @@ struct Grid {
         }
     }
 
-    void SetGridTextLayout(int ds, bool vert, bool noset, const Selection &sel) {
-        foreachcellinsel(c, sel) c->SetGridTextLayout(ds, vert, noset);
+    void SetGridTextLayout(int ds, bool vert, bool noset, const Selection &sel, int depth = -1) {
+        foreachcellinsel(c, sel) c->SetGridTextLayout(ds, vert, noset, depth);
     }
 
     bool IsTable() {
@@ -1464,6 +1516,7 @@ struct Grid {
                 Cell *dest = g->C(i, cury).get();
                 dest->text = ic->text;
                 dest->text.cell = dest;
+                dest->text.ResetImageCache();
                 ic = ic->parent;
             }
             cury++;

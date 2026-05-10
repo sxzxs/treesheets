@@ -725,6 +725,8 @@ void TestImageRoundTripPreservesDataScaleAndSharedReference() {
         doc.InitWith(std::move(root), filename, first, 1, 1);
         doc.SetImageBM(first, std::vector<uint8_t>(image_data), 'I', 2.5);
         doc.SetImageBM(second, std::vector<uint8_t>(image_data), 'I', 2.5);
+        first->text.SetImageScale(1.75);
+        second->text.SetImageScale(0.5);
         CHECK_EQ(treesheets::sys->imagelist.size(), static_cast<size_t>(1));
         CHECK(first->text.image == second->text.image);
 
@@ -748,6 +750,8 @@ void TestImageRoundTripPreservesDataScaleAndSharedReference() {
     CHECK(first_image->data == image_data);
     CHECK_EQ(first_image->type, 'I');
     CHECK_EQ(first_image->display_scale, 2.5);
+    CHECK(std::abs(loaded_doc.root->grid->C(0, 0)->text.image_scale - 1.75) < 0.000001);
+    CHECK(std::abs(loaded_doc.root->grid->C(1, 0)->text.image_scale - 0.5) < 0.000001);
 
     RemoveSaveArtifacts(filename);
 }

@@ -5,6 +5,12 @@ struct Text {
     int relsize {0};
     int stylebits {0};
     int extent {0};
+    double image_scale {1.0};
+    wxBitmap bm_image_display;
+    Image *bm_image_source {nullptr};
+    uint64_t bm_image_hash {0};
+    char bm_image_type {0};
+    double bm_image_effective_scale {0.0};
     wxDateTime lastedit;
     bool filtered {false};
 
@@ -12,9 +18,50 @@ struct Text {
 
     Text() { WasEdited(); }
 
+    static double ClampImageScale(double scale) {
+        if (!std::isfinite(scale)) return 1.0;
+        return max(0.05, min(scale, 20.0));
+    }
+
+    double EffectiveImageDisplayScale() const {
+        return image ? image->display_scale / ClampImageScale(image_scale) : 1.0;
+    }
+
+    void ResetImageCache() {
+        bm_image_display = wxNullBitmap;
+        bm_image_source = nullptr;
+        bm_image_hash = 0;
+        bm_image_type = 0;
+        bm_image_effective_scale = 0.0;
+    }
+
+    void SetImageScale(double scale) {
+        image_scale = ClampImageScale(scale);
+        ResetImageCache();
+    }
+
+    void ScaleImageDisplay(double scale) { SetImageScale(image_scale * scale); }
+
+    void ResetImageScale() { SetImageScale(1.0); }
+
     wxBitmap *DisplayImage() {
-        return cell->grid && cell->grid->folded ? &sys->frame->foldicon
-                                                : (image ? &image->Display() : nullptr);
+        if (cell->grid && cell->grid->folded) return &sys->frame->foldicon;
+        if (!image) return nullptr;
+
+        auto effective_scale = EffectiveImageDisplayScale();
+        if (!bm_image_display.IsOk() || bm_image_source != image || bm_image_hash != image->hash ||
+            bm_image_type != image->type ||
+            std::abs(bm_image_effective_scale - effective_scale) > 0.000001) {
+            auto &[it, mime] = imagetypes.at(image->type);
+            auto bm = ConvertBufferToWxBitmap(image->data, it);
+            image->pixel_width = bm.GetWidth();
+            ScaleBitmap(bm, sys->frame->FromDIP(1.0) / effective_scale, bm_image_display);
+            bm_image_source = image;
+            bm_image_hash = image->hash;
+            bm_image_type = image->type;
+            bm_image_effective_scale = effective_scale;
+        }
+        return &bm_image_display;
     }
 
     size_t EstimatedMemoryUse() {
@@ -75,7 +122,9 @@ struct Text {
                         wxBase64Encode(image->data.data(), image->data.size()) + "\" />");
         else if (format == A_EXPHTMLTE && image) {
             wxString relsize = wxString::Format(
-                "%d%%", static_cast<int>(100.0 * sys->frame->FromDIP(1.0) / image->display_scale));
+                "%d%%",
+                static_cast<int>(100.0 * sys->frame->FromDIP(1.0) /
+                                 EffectiveImageDisplayScale()));
             str.Prepend("<img src=\"" + wxString::Format("%llu", image->hash) +
                         image->GetFileExtension() + "\" width=\"" + relsize + "\" height=\"" +
                         relsize + "\" />");
@@ -746,6 +795,7 @@ struct Text {
         dos.WriteString(t.wx_str());
         dos.Write32(relsize);
         dos.Write32(image ? image->savedindex : -1);
+        dos.WriteDouble(image_scale);
         dos.Write32(stylebits);
         wxLongLong le = lastedit.GetValue();
         dos.Write64(&le, 1);
@@ -763,6 +813,8 @@ struct Text {
 
         int i = dis.Read32();
         image = i >= 0 ? sys->imagelist[sys->loadimageids[i]].get() : nullptr;
+
+        image_scale = sys->versionlastloaded >= 29 ? ClampImageScale(dis.ReadDouble()) : 1.0;
 
         if (sys->versionlastloaded >= 7) stylebits = dis.Read32();
 

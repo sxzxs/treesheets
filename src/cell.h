@@ -60,6 +60,7 @@ struct Cell {
         grid = nullptr;
         text.t.Clear();
         text.image = nullptr;
+        text.ResetImageScale();
         mergexs = mergeys = 1;
         Reset();
     }
@@ -214,6 +215,7 @@ struct Cell {
                                                grid ? make_shared<Grid>(grid->xs, grid->ys) : nullptr);
         c->text = text;
         c->text.cell = c.get();
+        c->text.ResetImageCache();
         c->bordercolor = bordercolor;
         c->mergexs = mergexs;
         c->mergeys = mergeys;
@@ -225,6 +227,16 @@ struct Cell {
     bool IsInside(int x, int y) const { return x >= 0 && y >= 0 && x < sx && y < sy; }
     int GetX(Document *doc) const { return ox + (parent ? parent->GetX(doc) : doc->hierarchysize); }
     int GetY(Document *doc) const { return oy + (parent ? parent->GetY(doc) : doc->hierarchysize); }
+    bool ImageDisplayRect(Document *doc, wxRect &rect) {
+        if (tiny || !text.image || (grid && grid->folded)) return false;
+        auto bm = text.DisplayImage();
+        int ixs = 0, iys = 0;
+        sys->ImageSize(bm, ixs, iys);
+        if (!ixs || !iys) return false;
+        rect = wxRect(GetX(doc) + 1 + g_margin_extra,
+                      GetY(doc) + ycenteroff + (tys - iys) / 2 + g_margin_extra, ixs, iys);
+        return true;
+    }
     int Depth() const { return parent ? parent->Depth() + 1 : 0; }
     Cell *Parent(int i) { return i ? parent->Parent(i - 1) : this; }
     Cell *SetParent(Cell *g) {
@@ -235,8 +247,78 @@ struct Cell {
         return c->parent == this || (c->parent && IsParentOf(c->parent));
     }
 
+    wxString ToJSON(int indent, Document *doc, bool inheritstyle, Cell *root) {
+        wxString json = JSONIndent(indent) + "{\n";
+        bool first = true;
+
+        JSONAppendField(json, indent + 2, "text", JSONQuoted(text.t), first);
+        JSONAppendField(json, indent + 2, "cell_type", wxString::Format("%d", celltype), first);
+
+        wxString style = JSONIndent(indent + 2) + "{\n";
+        bool stylefirst = true;
+        JSONAppendField(style, indent + 4, "relative_size", wxString::Format("%d", -text.relsize),
+                        stylefirst);
+        JSONAppendField(style, indent + 4, "style_bits", wxString::Format("%d", text.stylebits),
+                        stylefirst);
+        JSONAppendField(style, indent + 4, "cell_color", JSONColor(cellcolor), stylefirst);
+        JSONAppendField(style, indent + 4, "text_color", JSONColor(textcolor), stylefirst);
+        JSONAppendField(style, indent + 4, "border_color", JSONColor(bordercolor), stylefirst);
+        JSONAppendField(style, indent + 4, "draw_style", wxString::Format("%d", drawstyle),
+                        stylefirst);
+        style += "\n" + JSONIndent(indent + 2) + "}";
+        JSONAppendField(json, indent + 2, "style", style, first);
+
+        if (!note.IsEmpty()) JSONAppendField(json, indent + 2, "note", JSONQuoted(note), first);
+        if (text.filtered) JSONAppendField(json, indent + 2, "filtered", JSONBool(true), first);
+
+        if (mergexs != 1 || mergeys != 1) {
+            wxString merge = JSONIndent(indent + 2) + "{\n";
+            bool mergefirst = true;
+            JSONAppendField(merge, indent + 4, "columns", wxString::Format("%d", mergexs),
+                            mergefirst);
+            JSONAppendField(merge, indent + 4, "rows", wxString::Format("%d", mergeys),
+                            mergefirst);
+            merge += "\n" + JSONIndent(indent + 2) + "}";
+            JSONAppendField(json, indent + 2, "merge", merge, first);
+        }
+
+        if (text.image) {
+            wxString image = JSONIndent(indent + 2) + "{\n";
+            bool imagefirst = true;
+            JSONAppendField(image, indent + 4, "mime",
+                            JSONQuoted(imagetypes.at(text.image->type).second), imagefirst);
+            JSONAppendField(image, indent + 4, "hash",
+                            JSONQuoted(wxString::Format(
+                                "%llu", static_cast<unsigned long long>(text.image->hash))),
+                            imagefirst);
+            JSONAppendField(image, indent + 4, "data",
+                            JSONQuoted(wxBase64Encode(text.image->data.data(),
+                                                      text.image->data.size())),
+                            imagefirst);
+            JSONAppendField(image, indent + 4, "display_scale",
+                            wxString::Format("%.10g", text.image->display_scale), imagefirst);
+            JSONAppendField(image, indent + 4, "cell_scale",
+                            wxString::Format("%.10g", text.image_scale), imagefirst);
+            image += "\n" + JSONIndent(indent + 2) + "}";
+            JSONAppendField(json, indent + 2, "image", image, first);
+        }
+
+        if (grid) {
+            auto gridjson =
+                grid->ConvertToText(grid->SelectAll(), indent + 2, A_EXPJSON, doc, inheritstyle,
+                                    root);
+            gridjson.Trim(false);
+            JSONAppendField(json, indent + 2, "grid", gridjson, first);
+        }
+
+        json += "\n" + JSONIndent(indent) + "}";
+        return json;
+    }
+
     wxString ToText(int indent, const Selection &sel, int format, Document *doc, bool inheritstyle,
                     Cell *root) {
+        if (format == A_EXPJSON) return ToJSON(indent, doc, inheritstyle, root);
+
         wxString str = text.ToText(indent, sel, format);
         if ((format == A_EXPHTMLT || format == A_EXPHTMLTI || format == A_EXPHTMLTE) &&
             (text.stylebits & (STYLE_UNDERLINE | STYLE_STRIKETHRU)) && this != root &&
@@ -552,10 +634,12 @@ struct Cell {
         text.WasEdited();
     }
 
-    void SetGridTextLayout(int ds, bool vert, bool noset) {
+    void SetGridTextLayout(int ds, bool vert, bool noset, int depth = -1) {
         if (!noset) verticaltextandgrid = vert;
         if (ds != -1) drawstyle = ds;
-        if (grid) grid->SetGridTextLayout(ds, vert, noset, grid->SelectAll());
+        if (grid && depth != 0)
+            grid->SetGridTextLayout(ds, vert, noset, grid->SelectAll(),
+                                    depth > 0 ? depth - 1 : depth);
     }
 
     bool IsTag(Document *doc) { return doc->tags.contains(text.t); }

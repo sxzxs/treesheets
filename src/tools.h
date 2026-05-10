@@ -126,3 +126,48 @@ inline uint64_t FNV1A64(uint8_t *data, size_t size) {
     }
     return hash;
 }
+
+inline wxString JSONIndent(int indent) {
+    wxString spaces;
+    spaces.Pad(indent, ' ', false);
+    return spaces;
+}
+
+inline wxString JSONEscape(const wxString &str) {
+    wxString escaped;
+    for (auto cref : str) {
+        wxChar c = cref.GetValue();
+        switch (c) {
+            case '"': escaped += "\\\""; break;
+            case '\\': escaped += "\\\\"; break;
+            case '\b': escaped += "\\b"; break;
+            case '\f': escaped += "\\f"; break;
+            case '\n': escaped += "\\n"; break;
+            case '\r': escaped += "\\r"; break;
+            case '\t': escaped += "\\t"; break;
+            default:
+                if (c < 0x20)
+                    escaped += wxString::Format("\\u%04X", static_cast<unsigned int>(c));
+                else
+                    escaped += c;
+                break;
+        }
+    }
+    return escaped;
+}
+
+inline wxString JSONQuoted(const wxString &str) { return "\"" + JSONEscape(str) + "\""; }
+
+inline wxString JSONBool(bool value) { return value ? "true" : "false"; }
+
+inline wxString JSONColor(uint color) {
+    const auto rgb = ((color & 0xFF) << 16) | (color & 0xFF00) | ((color & 0xFF0000) >> 16);
+    return JSONQuoted(wxString::Format("#%06X", rgb));
+}
+
+inline void JSONAppendField(wxString &json, int indent, const wxString &name,
+                            const wxString &value, bool &first) {
+    if (!first) json += ",\n";
+    json += JSONIndent(indent) + JSONQuoted(name) + ": " + value;
+    first = false;
+}

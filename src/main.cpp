@@ -1,6 +1,6 @@
 #include "stdafx.h"
 
-static const auto TS_VERSION = 28;
+static const auto TS_VERSION = 29;
 static const auto g_grid_margin = 1;
 static const auto g_cell_margin = 2;
 static const auto g_margin_extra = 2;  // TODO, could make this configurable: 0/2/4/6
@@ -52,6 +52,7 @@ enum {
     A_EXPIMAGE,
     A_EXPSVG,
     A_EXPXML,
+    A_EXPJSON,
     A_EXPHTMLT,
     A_EXPHTMLTI,
     A_EXPHTMLTE,
@@ -238,6 +239,7 @@ enum {
     A_GS,
     A_BS,
     A_LS,
+    A_RENDERSTYLEONELAYER,
     A_RESETSIZE,
     A_RESETWIDTH,
     A_RESETSTYLE,

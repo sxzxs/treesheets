@@ -12,6 +12,17 @@ std::vector<uint8_t> DocumentSampleImageBytes() {
             0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01};
 }
 
+bool BitmapContainsColor(const wxBitmap &bitmap, const wxColour &color) {
+    wxImage image = bitmap.ConvertToImage();
+    if (!image.IsOk()) return false;
+    for (int y = 0; y < image.GetHeight(); y++)
+        for (int x = 0; x < image.GetWidth(); x++)
+            if (image.GetRed(x, y) == color.Red() && image.GetGreen(x, y) == color.Green() &&
+                image.GetBlue(x, y) == color.Blue())
+                return true;
+    return false;
+}
+
 #define RUN_DOCUMENT_TEST(test_name)                         \
     do {                                                     \
         if (std::getenv("TREESHEETS_TEST_TRACE"))            \
@@ -471,6 +482,17 @@ void TestExportFormatsEscapeTextAndPreserveStyles() {
     CHECK(html.Find("color: #445566;") != wxNOT_FOUND);
     CHECK(html.Find("font-weight: bold;") != wxNOT_FOUND);
     CHECK(html.Find("font-style: italic;") != wxNOT_FOUND);
+
+    auto json = grid->ConvertToText(selection, 0, A_EXPJSON, &doc, true, doc.root.get());
+    CHECK(json.Find("\"columns\": 2") != wxNOT_FOUND);
+    CHECK(json.Find("\"rows\": 1") != wxNOT_FOUND);
+    CHECK(json.Find("\"text\": \"A&B<1>\"") != wxNOT_FOUND);
+    CHECK(json.Find("\"text\": \"quote \\\"x\\\"\"") != wxNOT_FOUND);
+    CHECK(json.Find("\"cell_color\": \"#112233\"") != wxNOT_FOUND);
+    CHECK(json.Find("\"text_color\": \"#445566\"") != wxNOT_FOUND);
+    CHECK(json.Find("\"border_color\": \"#778899\"") != wxNOT_FOUND);
+    CHECK(json.Find(wxString::Format("\"cell_type\": %d", treesheets::CT_CODE)) !=
+          wxNOT_FOUND);
 }
 
 void TestHTMLExportEmbedsImagesAndNavigatesTextLinks() {
@@ -486,6 +508,21 @@ void TestHTMLExportEmbedsImagesAndNavigatesTextLinks() {
     left->text.t = "https://example.com";
     right->text.t = "https://example.com";
     doc.SetImageBM(right, DocumentSampleImageBytes(), 'I', 1.0);
+    right->text.SetImageScale(1.5);
+
+    auto original_image_data = right->text.image->data;
+    doc.SetSelect(grid->FindCell(right));
+    doc.ScaleSelectedImagesForDisplay(2.0);
+    CHECK(std::abs(right->text.image_scale - 3.0) < 0.000001);
+    CHECK(right->text.image->data == original_image_data);
+    doc.Undo(doc.undolist, doc.redolist);
+    grid = doc.root->grid.get();
+    left = grid->C(0, 0).get();
+    right = grid->C(1, 0).get();
+    CHECK(std::abs(right->text.image_scale - 1.5) < 0.000001);
+
+    auto json = grid->ConvertToText(grid->SelectAll(), 0, A_EXPJSON, &doc, true, doc.root.get());
+    CHECK(json.Find("\"cell_scale\": 1.5") != wxNOT_FOUND);
 
     auto html = grid->ConvertToText(grid->SelectAll(), 0, A_EXPHTMLTI, &doc, true, doc.root.get());
     CHECK(html.Find("<img src=\"data:image/png;base64,") != wxNOT_FOUND);
@@ -570,6 +607,60 @@ void TestWrapSelectionCreatesNestedGridAndUndoRestoresParent() {
     CHECK_EQ(doc.root->grid->xs, 2);
     CHECK_EQ(doc.root->grid->ys, 2);
     CHECK_EQ(doc.root->grid->C(1, 1)->text.t, wxString("d"));
+}
+
+void TestHierarchySwapPromotesTagsAndDemotesParents() {
+    treesheets::Document doc;
+    InitDocument(doc, MakeRoot(1, 3));
+    auto root = doc.root->grid.get();
+
+    auto warm = root->C(0, 0).get();
+    warm->text.t = "Warm";
+    warm->AddGrid(1, 2);
+    warm->grid->C(0, 0)->text.t = "Red";
+    warm->grid->C(0, 1)->text.t = "Orange";
+
+    auto cool = root->C(0, 1).get();
+    cool->text.t = "Cool";
+    cool->AddGrid(1, 1);
+    cool->grid->C(0, 0)->text.t = "Blue";
+
+    auto mixed = root->C(0, 2).get();
+    mixed->text.t = "Mixed";
+    mixed->AddGrid(1, 1);
+    auto purple = mixed->grid->C(0, 0).get();
+    purple->text.t = "Purple";
+    purple->AddGrid(1, 1);
+    purple->grid->C(0, 0)->text.t = "Crimson";
+
+    doc.SetSelect(warm->grid->FindCell(warm->grid->C(0, 0).get()));
+    CHECK_EQ(doc.Action(A_HSWAP), wxString(""));
+
+    CHECK_EQ(root->xs, 1);
+    CHECK_EQ(root->ys, 4);
+    CHECK_EQ(root->C(0, 0)->text.t, wxString("Warm"));
+    CHECK_EQ(root->C(0, 0)->grid->ys, 1);
+    CHECK_EQ(root->C(0, 0)->grid->C(0, 0)->text.t, wxString("Orange"));
+    CHECK_EQ(root->C(0, 1)->text.t, wxString("Cool"));
+    CHECK_EQ(root->C(0, 2)->text.t, wxString("Mixed"));
+    CHECK_EQ(root->C(0, 2)->grid->C(0, 0)->grid->C(0, 0)->text.t, wxString("Crimson"));
+
+    auto promoted = root->C(0, 3).get();
+    CHECK_EQ(promoted->text.t, wxString("Red"));
+    CHECK(promoted->grid != nullptr);
+    CHECK_EQ(promoted->grid->ys, 1);
+    CHECK_EQ(promoted->grid->C(0, 0)->text.t, wxString("Warm"));
+    CHECK_EQ(doc.selected.GetCell(), promoted);
+    CHECK(doc.modified);
+
+    doc.Undo(doc.undolist, doc.redolist);
+
+    CHECK_EQ(doc.root->grid->ys, 3);
+    CHECK_EQ(doc.root->grid->C(0, 0)->text.t, wxString("Warm"));
+    CHECK_EQ(doc.root->grid->C(0, 0)->grid->C(0, 0)->text.t, wxString("Red"));
+    CHECK_EQ(doc.root->grid->C(0, 2)->text.t, wxString("Mixed"));
+    CHECK_EQ(doc.root->grid->C(0, 2)->grid->C(0, 0)->grid->C(0, 0)->text.t,
+             wxString("Crimson"));
 }
 
 void TestMergeAndUnmergeCellsThroughDocumentAction() {
@@ -693,6 +784,104 @@ void TestFoldActionsToggleNestedGrids() {
     CHECK(!second->grid->folded);
 }
 
+void TestRenderStyleSingleChildSelectionDoesNotChangeParent() {
+    treesheets::Document doc;
+    InitDocument(doc, MakeRoot(1, 1));
+    auto parent = doc.root->grid->C(0, 0).get();
+    parent->grid = std::make_shared<treesheets::Grid>(1, 1, parent);
+    parent->grid->InitCells();
+    auto only_child = parent->grid->C(0, 0).get();
+
+    doc.SetSelect(treesheets::Selection(parent->grid, 0, 0, 1, 1));
+    CHECK_EQ(doc.Action(A_V_LS), wxString(""));
+
+    CHECK_EQ(parent->drawstyle, treesheets::DS_GRID);
+    CHECK_EQ(only_child->drawstyle, treesheets::DS_BLOBLINE);
+}
+
+void TestRenderStyleWholeGridSelectionStillChangesParentGridStyle() {
+    treesheets::Document doc;
+    InitDocument(doc, MakeRoot(1, 1));
+    auto parent = doc.root->grid->C(0, 0).get();
+    parent->grid = std::make_shared<treesheets::Grid>(2, 1, parent);
+    parent->grid->InitCells();
+
+    doc.SetSelect(parent->grid->SelectAll());
+    CHECK_EQ(doc.Action(A_V_LS), wxString(""));
+
+    CHECK_EQ(parent->drawstyle, treesheets::DS_BLOBLINE);
+    CHECK_EQ(parent->grid->C(0, 0)->drawstyle, treesheets::DS_BLOBLINE);
+    CHECK_EQ(parent->grid->C(1, 0)->drawstyle, treesheets::DS_BLOBLINE);
+}
+
+void TestRenderStyleOneLayerOptionStopsAtSelectedCells() {
+    treesheets::sys->renderstyleonelayer = true;
+
+    treesheets::Document doc;
+    InitDocument(doc, MakeRoot(1, 1));
+    auto parent = doc.root->grid->C(0, 0).get();
+    parent->grid = std::make_shared<treesheets::Grid>(1, 1, parent);
+    parent->grid->InitCells();
+    auto child = parent->grid->C(0, 0).get();
+    child->grid = std::make_shared<treesheets::Grid>(1, 1, child);
+    child->grid->InitCells();
+    auto grandchild = child->grid->C(0, 0).get();
+
+    doc.SetSelect(treesheets::Selection(doc.root->grid, 0, 0, 1, 1));
+    CHECK_EQ(doc.Action(A_V_LS), wxString(""));
+
+    CHECK_EQ(parent->drawstyle, treesheets::DS_BLOBLINE);
+    CHECK_EQ(child->drawstyle, treesheets::DS_GRID);
+    CHECK_EQ(grandchild->drawstyle, treesheets::DS_GRID);
+
+    treesheets::sys->renderstyleonelayer = false;
+}
+
+void TestRenderStyleDefaultStillRecursesThroughDescendants() {
+    treesheets::sys->renderstyleonelayer = false;
+
+    treesheets::Document doc;
+    InitDocument(doc, MakeRoot(1, 1));
+    auto parent = doc.root->grid->C(0, 0).get();
+    parent->grid = std::make_shared<treesheets::Grid>(1, 1, parent);
+    parent->grid->InitCells();
+    auto child = parent->grid->C(0, 0).get();
+    child->grid = std::make_shared<treesheets::Grid>(1, 1, child);
+    child->grid->InitCells();
+    auto grandchild = child->grid->C(0, 0).get();
+
+    doc.SetSelect(treesheets::Selection(doc.root->grid, 0, 0, 1, 1));
+    CHECK_EQ(doc.Action(A_V_LS), wxString(""));
+
+    CHECK_EQ(parent->drawstyle, treesheets::DS_BLOBLINE);
+    CHECK_EQ(child->drawstyle, treesheets::DS_BLOBLINE);
+    CHECK_EQ(grandchild->drawstyle, treesheets::DS_BLOBLINE);
+}
+
+void TestLineRenderUsesGridBorderColorForConnectors() {
+    treesheets::Document doc;
+    InitDocument(doc, MakeRoot(1, 1));
+    auto parent = doc.root->grid->C(0, 0).get();
+    parent->text.t = "Parent";
+    parent->drawstyle = treesheets::DS_BLOBLINE;
+    parent->verticaltextandgrid = true;
+    parent->grid = std::make_shared<treesheets::Grid>(1, 2, parent);
+    parent->grid->InitCells();
+    parent->grid->bordercolor = 0x123456;
+    parent->grid->C(0, 0)->text.t = "Child A";
+    parent->grid->C(0, 1)->text.t = "Child B";
+
+    wxBitmap bitmap(600, 400, 24);
+    wxMemoryDC dc(bitmap);
+    doc.maxx = 600;
+    doc.maxy = 400;
+    doc.scrollx = doc.scrolly = 0;
+    doc.DrawView(dc);
+    dc.SelectObject(wxNullBitmap);
+
+    CHECK(BitmapContainsColor(bitmap, wxColour(treesheets::LightColor(parent->grid->bordercolor))));
+}
+
 }  // namespace
 
 int main() {
@@ -720,11 +909,17 @@ int main() {
     RUN_DOCUMENT_TEST(TestHTMLExportEmbedsImagesAndNavigatesTextLinks);
     RUN_DOCUMENT_TEST(TestHierarchifyAndFlattenRoundTripTable);
     RUN_DOCUMENT_TEST(TestWrapSelectionCreatesNestedGridAndUndoRestoresParent);
+    RUN_DOCUMENT_TEST(TestHierarchySwapPromotesTagsAndDemotesParents);
     RUN_DOCUMENT_TEST(TestMergeAndUnmergeCellsThroughDocumentAction);
     RUN_DOCUMENT_TEST(TestDeleteCellSelectionClearsContentAndUndoRestoresIt);
     RUN_DOCUMENT_TEST(TestDeleteThinRowSelectionRemovesRow);
     RUN_DOCUMENT_TEST(TestDeleteThinColumnSelectionRemovesColumn);
     RUN_DOCUMENT_TEST(TestFoldActionsToggleNestedGrids);
+    RUN_DOCUMENT_TEST(TestRenderStyleSingleChildSelectionDoesNotChangeParent);
+    RUN_DOCUMENT_TEST(TestRenderStyleWholeGridSelectionStillChangesParentGridStyle);
+    RUN_DOCUMENT_TEST(TestRenderStyleOneLayerOptionStopsAtSelectedCells);
+    RUN_DOCUMENT_TEST(TestRenderStyleDefaultStillRecursesThroughDescendants);
+    RUN_DOCUMENT_TEST(TestLineRenderUsesGridBorderColorForConnectors);
 
     return Finish("document tests passed");
 }

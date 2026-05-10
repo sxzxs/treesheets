@@ -36,6 +36,17 @@ struct TSCanvas : public wxScrolledCanvas {
     };
 
     void OnMotion(wxMouseEvent &me) {
+        if (doc->image_resize_dragging) {
+            if (me.LeftIsDown()) {
+                doc->UpdateImageResize(me.GetX(), me.GetY());
+            } else {
+                doc->FinishImageResize();
+                if (HasCapture()) ReleaseMouse();
+            }
+            lastmousepos = me.GetPosition();
+            return;
+        }
+
         wxInfoDC dc(this);
         doc->UpdateHover(dc, me.GetX(), me.GetY());
         if (me.LeftIsDown() || me.RightIsDown()) {
@@ -66,6 +77,10 @@ struct TSCanvas : public wxScrolledCanvas {
             CursorScroll(-p.x, -p.y);
         } else {
             if (doc->hover != doc->prev && !doc->hover.Thin()) sys->frame->UpdateStatus(doc->hover, false);
+            if (doc->ImageResizeHitTest(me.GetX(), me.GetY()))
+                SetCursor(wxCursor(wxCURSOR_SIZENWSE));
+            else
+                doc->ResetCursor();
         }
         lastmousepos = me.GetPosition();
     }
@@ -88,6 +103,11 @@ struct TSCanvas : public wxScrolledCanvas {
         if (frame->filter) frame->filter->SetFocus();
         #endif
         SetFocus();
+        if (!me.ShiftDown() && doc->StartImageResize(me.GetX(), me.GetY())) {
+            if (!HasCapture()) CaptureMouse();
+            Refresh();
+            return;
+        }
         if (me.ShiftDown())
             OnMotion(me);
         else
@@ -95,6 +115,12 @@ struct TSCanvas : public wxScrolledCanvas {
     }
 
     void OnLeftUp(wxMouseEvent &me) {
+        if (doc->FinishImageResize()) {
+            if (HasCapture()) ReleaseMouse();
+            sys->frame->UpdateStatus(doc->selected, true);
+            Refresh();
+            return;
+        }
         if (me.CmdDown() || me.AltDown()) {
             wxInfoDC dc(this);
             doc->UpdateHover(dc, me.GetX(), me.GetY());

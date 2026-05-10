@@ -39,6 +39,7 @@ struct System {
     bool casesensitivesearch {true};
     bool darkennonmatchingcells {false};
     bool fastrender {true};
+    bool renderstyleonelayer {false};
     bool showtoolbar {true};
     bool showstatusbar {true};
     bool followdarkmode {false};
@@ -83,6 +84,7 @@ struct System {
         cfg->Read("thinselc", &thinselc, thinselc);
         cfg->Read("autosave", &autosave, autosave);
         cfg->Read("fastrender", &fastrender, fastrender);
+        cfg->Read("renderstyleonelayer", &renderstyleonelayer, renderstyleonelayer);
         cfg->Read("followdarkmode", &followdarkmode, followdarkmode);
         cfg->Read("minclose", &minclose, minclose);
         cfg->Read("singletray", &singletray, singletray);

@@ -147,6 +147,8 @@ struct TSFrame : wxFrame {
         auto expmenu = new wxMenu();
         MyAppend(expmenu, A_EXPXML, _("&XML..."),
                  _("Export the current view as XML (which can also be reimported without losing structure)"));
+        MyAppend(expmenu, A_EXPJSON, _("&JSON..."),
+                 _("Export the current view as JSON for scripts and web tools"));
         expmenu->AppendSeparator();
         MyAppend(expmenu, A_EXPHTMLT, _("&HTML (Tables+Styling)..."),
                  _("Export the current view as HTML using nested tables, that will look somewhat like the TreeSheet"));
@@ -418,10 +420,10 @@ struct TSFrame : wxFrame {
             MyAppend(
                 imgmenu, A_IMAGESCW, _("Scale (re-sample pixels, by &width)"),
                 _("Change the image(s) size if it is too big, by reducing the amount of pixels"));
-            MyAppend(imgmenu, A_IMAGESCF, _("Scale (&display only)"),
-                     _("Change the image(s) size if it is too big or too small, by changing the size shown on screen. Applies to all uses of this image."));
+            MyAppend(imgmenu, A_IMAGESCF, _("Scale (&display only, lossless)"),
+                     _("Change the selected image display size without resampling pixels."));
             MyAppend(imgmenu, A_IMAGESCN, _("&Reset Scale (display only)"),
-                     _("Change the image(s) scale to match DPI of the current display. Applies to all uses of this image."));
+                     _("Reset the selected image display size without resampling pixels."));
             imgmenu->AppendSeparator();
             MyAppend(
                 imgmenu, A_SAVE_AS_JPEG, _("Embed as &JPEG"),
@@ -458,6 +460,11 @@ struct TSFrame : wxFrame {
             MyAppend(laymenu, A_GS, _("Grid Style Rendering") + "\t" CTRLORALT "+7");
             MyAppend(laymenu, A_BS, _("Bubble Style Rendering") + "\t" CTRLORALT "+8");
             MyAppend(laymenu, A_LS, _("Line Style Rendering") + "\t" CTRLORALT "+9");
+            laymenu->AppendSeparator();
+            laymenu->AppendCheckItem(
+                A_RENDERSTYLEONELAYER, _("Apply render style to selected layer only"),
+                _("When checked, layout and render style commands affect only selected cells, not descendant cells"));
+            laymenu->Check(A_RENDERSTYLEONELAYER, sys->renderstyleonelayer);
             laymenu->AppendSeparator();
             MyAppend(laymenu, A_TEXTGRID, _("Toggle Vertical Layout") + "\t" CTRLORALT "+0",
                      _("Make a hierarchy layout more vertical (default) or more horizontal"));
@@ -2326,6 +2333,12 @@ struct TSFrame : wxFrame {
             case A_ZOOMSCR: sys->cfg->Write("zoomscroll", sys->zoomscroll = ce.IsChecked()); break;
             case A_THINSELC: sys->cfg->Write("thinselc", sys->thinselc = ce.IsChecked()); break;
             case A_AUTOSAVE: sys->cfg->Write("autosave", sys->autosave = ce.IsChecked()); break;
+            case A_RENDERSTYLEONELAYER:
+                sys->cfg->Write("renderstyleonelayer",
+                                sys->renderstyleonelayer = ce.IsChecked());
+                if (GetMenuBar()) GetMenuBar()->Check(A_RENDERSTYLEONELAYER,
+                                                      sys->renderstyleonelayer);
+                break;
             case A_CENTERED:
                 sys->cfg->Write("centered", sys->centered = ce.IsChecked());
                 Refresh();

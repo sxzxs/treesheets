@@ -76,6 +76,12 @@ struct Document {
     bool scaledviewingmode {false};
     bool paintscrolltoselection {true};
     double currentviewscale {1.0};
+    bool image_resize_dragging {false};
+    Cell *image_resize_cell {nullptr};
+    double image_resize_start_scale {1.0};
+    int image_resize_start_width {0};
+    int image_resize_start_height {0};
+    wxPoint image_resize_anchor;
     bool searchfilter {false};
     int editfilter {0};
     wxDateTime lastmodificationtime;
@@ -231,6 +237,87 @@ struct Document {
         if (!s.grid) return;
         ResetFont();
         s.grid->DrawSelect(this, dc, s);
+    }
+
+    wxPoint DeviceToDocumentPoint(int mx, int my) {
+        int x, y;
+        canvas->CalcUnscrolledPosition(mx, my, &x, &y);
+        return wxPoint(static_cast<int>(x / currentviewscale - centerx / currentviewscale),
+                       static_cast<int>(y / currentviewscale - centery / currentviewscale));
+    }
+
+    static wxRect ImageResizeHandleRect(const wxRect &image_rect) {
+        const int handle = 8;
+        return wxRect(image_rect.x + max(0, image_rect.width - handle),
+                      image_rect.y + max(0, image_rect.height - handle), handle, handle);
+    }
+
+    bool SelectedImageRect(wxRect &rect, Cell **image_cell = nullptr) {
+        if (!selected.grid || selected.TextEdit()) return false;
+        auto cell = selected.GetCell();
+        if (!cell || !cell->text.image) return false;
+        if (!cell->ImageDisplayRect(this, rect)) return false;
+        if (image_cell) *image_cell = cell;
+        return true;
+    }
+
+    bool ImageResizeHitTest(int mx, int my) {
+        if (!canvas) return false;
+        wxRect image_rect;
+        if (!SelectedImageRect(image_rect)) return false;
+        return ImageResizeHandleRect(image_rect).Contains(DeviceToDocumentPoint(mx, my));
+    }
+
+    void DrawImageResizeHandle(wxDC &dc) {
+        wxRect image_rect;
+        if (!SelectedImageRect(image_rect)) return;
+        auto handle = ImageResizeHandleRect(image_rect);
+        dc.SetBrush(wxBrush(LightColor(0x000000)));
+        dc.SetPen(wxPen(LightColor(0xFFFFFF)));
+        dc.DrawRectangle(handle);
+        dc.DrawLine(handle.x + 2, handle.y + handle.height - 2, handle.x + handle.width - 2,
+                    handle.y + 2);
+    }
+
+    bool StartImageResize(int mx, int my) {
+        if (!canvas) return false;
+        wxRect image_rect;
+        Cell *cell = nullptr;
+        if (!SelectedImageRect(image_rect, &cell)) return false;
+        if (!ImageResizeHandleRect(image_rect).Contains(DeviceToDocumentPoint(mx, my))) return false;
+
+        cell->AddUndo(this);
+        image_resize_dragging = true;
+        image_resize_cell = cell;
+        image_resize_start_scale = cell->text.image_scale;
+        image_resize_start_width = max(1, image_rect.width);
+        image_resize_start_height = max(1, image_rect.height);
+        image_resize_anchor = image_rect.GetTopLeft();
+        return true;
+    }
+
+    bool UpdateImageResize(int mx, int my) {
+        if (!image_resize_dragging || !image_resize_cell || !image_resize_cell->text.image)
+            return false;
+        auto p = DeviceToDocumentPoint(mx, my);
+        auto new_width = max(8, p.x - image_resize_anchor.x);
+        auto new_height = max(8, p.y - image_resize_anchor.y);
+        auto width_scale = static_cast<double>(new_width) / image_resize_start_width;
+        auto height_scale = static_cast<double>(new_height) / image_resize_start_height;
+        image_resize_cell->text.SetImageScale(image_resize_start_scale *
+                                              max(width_scale, height_scale));
+        currentdrawroot->ResetChildren();
+        currentdrawroot->ResetLayout();
+        paintscrolltoselection = false;
+        if (canvas) canvas->Refresh();
+        return true;
+    }
+
+    bool FinishImageResize() {
+        if (!image_resize_dragging) return false;
+        image_resize_dragging = false;
+        image_resize_cell = nullptr;
+        return true;
     }
 
     void UpdateHover(wxReadOnlyDC &dc, int mx, int my) {
@@ -612,6 +699,7 @@ struct Document {
         ShiftToCenter(dc);
         Render(dc);
         DrawSelect(dc, selected);
+        DrawImageResizeHandle(dc);
         if (paintscrolltoselection) {
             paintscrolltoselection = false;
                 canvas->CallAfter([this, sel = selected, sx = scrollx, sy = scrolly, mx = maxx, my = maxy](){
@@ -764,6 +852,9 @@ struct Document {
             wxTextOutputStream dos(fos);
             wxString content = exportroot->ToText(0, Selection(), action, this, true, exportroot);
             switch (action) {
+                case A_EXPJSON:
+                    dos.WriteString(content);
+                    break;
                 case A_EXPXML:
                     dos.WriteString(
                         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
@@ -923,6 +1014,28 @@ struct Document {
         return wxEmptyString;
     }
 
+    wxString ScaleSelectedImagesForDisplay(double scale, bool reset = false) {
+        if (!selected.grid) return NoSel();
+        CollectCellsSel(true);
+        bool anyimages = false;
+        for (auto c : itercells) anyimages = anyimages || c->text.image;
+        if (!anyimages) return _("No image found.");
+
+        selected.grid->cell->AddUndo(this);
+        for (auto c : itercells) {
+            if (!c->text.image) continue;
+            if (reset)
+                c->text.ResetImageScale();
+            else
+                c->text.ScaleImageDisplay(scale);
+        }
+        currentdrawroot->ResetChildren();
+        currentdrawroot->ResetLayout();
+        if (canvas) canvas->Refresh();
+        return reset ? _("Image display scale reset.")
+                     : _("Image display scale changed without resampling pixels.");
+    }
+
     wxString Action(int action) {
         switch (action) {
             case wxID_EXECUTE:
@@ -955,6 +1068,8 @@ struct Document {
             case A_SAVEALL: sys->SaveAll(); return wxEmptyString;
 
             case A_EXPXML: return Export("xml", "*.xml", _("Choose XML file to write"), action);
+            case A_EXPJSON:
+                return Export("json", "*.json", _("Choose JSON file to write"), action);
             case A_EXPHTMLT:
             case A_EXPHTMLTE:
             case A_EXPHTMLB:
@@ -1885,6 +2000,7 @@ struct Document {
                         _("Image Resize"), 50, 5, 400, sys->frame);
                 }
                 if (v < 0) return wxEmptyString;
+                if (action == A_IMAGESCF) return ScaleSelectedImagesForDisplay(v / 100.0);
                 for (auto image : imagestomanipulate) {
                     if (action == A_IMAGESCW) {
                         int pw = image->pixel_width;
@@ -1892,8 +2008,6 @@ struct Document {
                             image->ImageRescale(static_cast<double>(v) / static_cast<double>(pw));
                     } else if (action == A_IMAGESCP) {
                         image->ImageRescale(v / 100.0);
-                    } else {
-                        image->DisplayScale(v / 100.0);
                     }
                 }
                 currentdrawroot->ResetChildren();
@@ -1903,13 +2017,7 @@ struct Document {
             }
 
             case A_IMAGESCN: {
-                loopallcellssel(c, true) if (c->text.image) {
-                    c->text.image->ResetScale(sys->frame->FromDIP(1.0));
-                }
-                currentdrawroot->ResetChildren();
-                currentdrawroot->ResetLayout();
-                canvas->Refresh();
-                return wxEmptyString;
+                return ScaleSelectedImagesForDisplay(1.0, true);
             }
 
             case A_IMAGESVA: {
@@ -2108,7 +2216,7 @@ struct Document {
                 SetSelect(pp->grid->HierarchySwap(cell->text.t));
                 pp->ResetChildren();
                 pp->ResetLayout();
-                canvas->Refresh();
+                if (canvas) canvas->Refresh();
                 return wxEmptyString;
             }
 
@@ -2196,10 +2304,13 @@ struct Document {
         if (selected.Thin()) return NoThin();
         selected.grid->cell->AddUndo(this);
         bool v = toggle ? !selected.GetFirst()->verticaltextandgrid : vert;
-        if (ds >= 0 && selected.IsAll()) selected.grid->cell->drawstyle = ds;
-        selected.grid->SetGridTextLayout(ds, v, noset, selected);
+        bool one_layer = sys->renderstyleonelayer;
+        if (ds >= 0 && selected.IsAll() && !selected.GetCell() && !one_layer)
+            selected.grid->cell->drawstyle = ds;
+        selected.grid->SetGridTextLayout(ds, v, noset, selected,
+                                         one_layer ? 0 : -1);
         selected.grid->cell->ResetChildren();
-        canvas->Refresh();
+        if (canvas) canvas->Refresh();
         return wxEmptyString;
     }
 
@@ -3217,6 +3328,7 @@ struct Document {
     void SetImageBM(Cell *c, auto &&data, char type, double scale) {
         c->text.image = sys->lastimage =
             sys->imagelist[sys->AddImageToList(scale, std::move(data), type)].get();
+        c->text.ResetImageScale();
     }
 
     bool LoadImageIntoCell(const wxString &filename, Cell *c, double scale) {
