@@ -18,6 +18,7 @@ BEGIN_EVENT_TABLE(treesheets::TSFrame, wxFrame)
   EVT_ICONIZE(treesheets::TSFrame::OnIconize)
   EVT_AUINOTEBOOK_PAGE_CHANGED(wxID_ANY, treesheets::TSFrame::OnTabChange)
   EVT_AUINOTEBOOK_PAGE_CLOSE(wxID_ANY, treesheets::TSFrame::OnTabClose)
+  EVT_AUINOTEBOOK_TAB_RIGHT_UP(wxID_ANY, treesheets::TSFrame::OnTabRightUp)
   EVT_SYS_COLOUR_CHANGED(treesheets::TSFrame::OnSysColourChanged)
 END_EVENT_TABLE()
 

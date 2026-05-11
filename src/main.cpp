@@ -301,6 +301,16 @@ enum {
     A_MERGECELLS,
     A_UNMERGECELLS,
     A_TRAY_RESTORE,
+    A_TABCLOSE,
+    A_TABCLOSEOTHERS,
+    A_TABCLOSERIGHT,
+    A_TABCLOSESAVED,
+    A_TABCLOSEALL,
+    A_TABSAVE,
+    A_TABSAVEAS,
+    A_TABCOPYPATH,
+    A_TABCOPYRELPATH,
+    A_TABREVEAL,
     A_TAGSET = 1000,  // and all values from here on
     #ifdef ENABLE_LOBSTER
         A_SCRIPT = 2000,  // and all values from here on

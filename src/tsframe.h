@@ -18,6 +18,7 @@ struct TSFrame : wxFrame {
     wxString explorerroot;
     wxString explorercontextpath;
     wxString explorerpendingrefreshpath;
+    int tabcontextpage {-1};
     vector<wxString> explorerresultpaths;
     std::set<wxString> explorerwatchedpaths;
     wxBitmap line_nw;
@@ -1964,6 +1965,203 @@ struct TSFrame : wxFrame {
         PopupMenu(&menu);
     }
 
+    TSCanvas *GetTabContextCanvas() const {
+        if (!notebook) return nullptr;
+        auto page = tabcontextpage;
+        if (page < 0 || page >= static_cast<int>(notebook->GetPageCount()))
+            page = notebook->GetSelection();
+        return page >= 0 ? static_cast<TSCanvas *>(notebook->GetPage(page)) : nullptr;
+    }
+
+    vector<TSCanvas *> GetAllTabs() const {
+        vector<TSCanvas *> tabs;
+        if (!notebook) return tabs;
+        tabs.reserve(notebook->GetPageCount());
+        for (size_t i = 0; i < notebook->GetPageCount(); i++)
+            tabs.push_back(static_cast<TSCanvas *>(notebook->GetPage(i)));
+        return tabs;
+    }
+
+    void SelectTab(TSCanvas *canvas) {
+        if (!notebook || !canvas) return;
+        auto page = notebook->FindPage(canvas);
+        if (page != wxNOT_FOUND && page != notebook->GetSelection()) notebook->SetSelection(page);
+    }
+
+    bool CloseTab(TSCanvas *canvas, bool closeframewhenlast = true) {
+        if (!notebook || !canvas) return true;
+        auto page = notebook->FindPage(canvas);
+        if (page == wxNOT_FOUND) return true;
+
+        notebook->SetSelection(page);
+        if (notebook->GetPageCount() <= 1) {
+            if (!closeframewhenlast) return false;
+            fromclosebox = false;
+            Close();
+            return false;
+        }
+
+        if (canvas->doc->CloseDocument()) return false;
+        notebook->DeletePage(page);
+        return true;
+    }
+
+    bool CloseTabs(const vector<TSCanvas *> &tabs, bool closeframewhenlast = true) {
+        for (auto canvas : tabs) {
+            if (!notebook) return false;
+            if (notebook->FindPage(canvas) == wxNOT_FOUND) continue;
+            if (!CloseTab(canvas, closeframewhenlast)) return false;
+        }
+        return true;
+    }
+
+    vector<TSCanvas *> GetTabsToRight(TSCanvas *canvas) const {
+        vector<TSCanvas *> tabs;
+        if (!notebook || !canvas) return tabs;
+
+        auto page = notebook->FindPage(canvas);
+        if (page == wxNOT_FOUND) return tabs;
+
+        auto position = notebook->GetPagePosition(static_cast<size_t>(page));
+        if (position) {
+            auto pages = notebook->GetPagesInDisplayOrder(position.tabCtrl);
+            auto aftertarget = false;
+            for (auto pageindex : pages) {
+                if (static_cast<int>(pageindex) == page) {
+                    aftertarget = true;
+                    continue;
+                }
+                if (aftertarget)
+                    tabs.push_back(static_cast<TSCanvas *>(notebook->GetPage(pageindex)));
+            }
+            return tabs;
+        }
+
+        for (auto i = page + 1; i < static_cast<int>(notebook->GetPageCount()); i++)
+            tabs.push_back(static_cast<TSCanvas *>(notebook->GetPage(i)));
+        return tabs;
+    }
+
+    bool HasSavedTabs() const {
+        if (!notebook) return false;
+        for (size_t i = 0; i < notebook->GetPageCount(); i++) {
+            auto canvas = static_cast<TSCanvas *>(notebook->GetPage(i));
+            if (!canvas->doc->modified) return true;
+        }
+        return false;
+    }
+
+    void CloseOtherTabs(TSCanvas *keep) {
+        if (!notebook || !keep) return;
+        vector<TSCanvas *> tabs;
+        for (auto canvas : GetAllTabs())
+            if (canvas != keep) tabs.push_back(canvas);
+        if (CloseTabs(tabs, false)) SelectTab(keep);
+    }
+
+    void CloseTabsToRight(TSCanvas *canvas) {
+        auto tabs = GetTabsToRight(canvas);
+        if (CloseTabs(tabs, false)) SelectTab(canvas);
+    }
+
+    void CloseSavedTabs() {
+        vector<TSCanvas *> tabs;
+        if (!notebook) return;
+        for (auto canvas : GetAllTabs())
+            if (!canvas->doc->modified) tabs.push_back(canvas);
+        CloseTabs(tabs);
+    }
+
+    void CopyTabPath(TSCanvas *canvas, bool relative) {
+        if (!canvas || canvas->doc->filename.IsEmpty()) return;
+        auto path = canvas->doc->filename;
+        if (relative) {
+            wxFileName filename(path);
+            filename.MakeRelativeTo(explorerroot);
+            path = filename.GetFullPath();
+        }
+        if (wxTheClipboard->Open()) {
+            wxTheClipboard->SetData(new wxTextDataObject(path));
+            wxTheClipboard->Close();
+            SetStatus(_("Path copied."));
+        }
+    }
+
+    void PopupTabContextMenu(int page) {
+        if (!notebook || page < 0 || page >= static_cast<int>(notebook->GetPageCount())) return;
+        tabcontextpage = page;
+        auto canvas = static_cast<TSCanvas *>(notebook->GetPage(page));
+        SelectTab(canvas);
+
+        wxMenu menu;
+        menu.Append(A_TABCLOSE, _("Close"));
+        auto closeothers = menu.Append(A_TABCLOSEOTHERS, _("Close Others"));
+        closeothers->Enable(notebook->GetPageCount() > 1);
+        auto closeright = menu.Append(A_TABCLOSERIGHT, _("Close to the Right"));
+        closeright->Enable(!GetTabsToRight(canvas).empty());
+        auto closesaved = menu.Append(A_TABCLOSESAVED, _("Close Saved"));
+        closesaved->Enable(HasSavedTabs());
+        menu.Append(A_TABCLOSEALL, _("Close All"));
+        menu.AppendSeparator();
+        menu.Append(A_TABSAVE, _("Save"));
+        menu.Append(A_TABSAVEAS, _("Save As..."));
+        menu.Append(A_SAVEALL, _("Save All"));
+
+        auto path = canvas->doc->filename;
+        menu.AppendSeparator();
+        auto reveal = menu.Append(A_TABREVEAL, _("Show in File Explorer"));
+        reveal->Enable(!path.IsEmpty() && (wxFileExists(path) || wxDirExists(path)));
+        auto copypath = menu.Append(A_TABCOPYPATH, _("Copy Path"));
+        copypath->Enable(!path.IsEmpty());
+        auto copyrelpath = menu.Append(A_TABCOPYRELPATH, _("Copy Relative Path"));
+        copyrelpath->Enable(!path.IsEmpty());
+
+        menu.Bind(wxEVT_MENU, &TSFrame::OnTabContextMenuCommand, this);
+        PopupMenu(&menu);
+        tabcontextpage = -1;
+    }
+
+    void OnTabContextMenuCommand(wxCommandEvent &ce) {
+        auto canvas = GetTabContextCanvas();
+        switch (ce.GetId()) {
+            case A_TABCLOSE:
+                CloseTab(canvas);
+                break;
+            case A_TABCLOSEOTHERS:
+                CloseOtherTabs(canvas);
+                break;
+            case A_TABCLOSERIGHT:
+                CloseTabsToRight(canvas);
+                break;
+            case A_TABCLOSESAVED:
+                CloseSavedTabs();
+                break;
+            case A_TABCLOSEALL:
+                CloseTabs(GetAllTabs());
+                break;
+            case A_TABSAVE:
+                SelectTab(canvas);
+                if (canvas) SetStatus(canvas->doc->Save(false));
+                break;
+            case A_TABSAVEAS:
+                SelectTab(canvas);
+                if (canvas) SetStatus(canvas->doc->Save(true));
+                break;
+            case A_SAVEALL:
+                sys->SaveAll();
+                break;
+            case A_TABREVEAL:
+                if (canvas) RevealExplorerPathInSystem(canvas->doc->filename);
+                break;
+            case A_TABCOPYPATH:
+                CopyTabPath(canvas, false);
+                break;
+            case A_TABCOPYRELPATH:
+                CopyTabPath(canvas, true);
+                break;
+        }
+    }
+
     bool ExplorerSearchHasFocus() const {
         auto focus = wxWindow::FindFocus();
         while (focus) {
@@ -3253,6 +3451,10 @@ struct TSFrame : wxFrame {
         } else {
             nbe.Skip();
         }
+    }
+
+    void OnTabRightUp(wxAuiNotebookEvent &nbe) {
+        PopupTabContextMenu(nbe.GetSelection());
     }
 
     void OnSearch(wxCommandEvent &ce) {
