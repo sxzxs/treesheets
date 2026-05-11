@@ -72,8 +72,7 @@ struct Text {
         if (!bm_image_display.IsOk() || bm_image_source != image || bm_image_hash != image->hash ||
             bm_image_type != image->type ||
             std::abs(bm_image_effective_scale - effective_scale) > 0.000001) {
-            auto &[it, mime] = imagetypes.at(image->type);
-            auto bm = ConvertBufferToWxBitmap(image->data, it);
+            auto &bm = image->Bitmap();
             image->pixel_width = bm.GetWidth();
             auto dpi_scale = sys->frame ? sys->frame->FromDIP(1.0) : 1.0;
             ScaleBitmap(bm, dpi_scale / effective_scale, bm_image_display);
@@ -83,6 +82,11 @@ struct Text {
             bm_image_effective_scale = effective_scale;
         }
         return &bm_image_display;
+    }
+
+    wxBitmap *SourceImage() {
+        if (cell->grid && cell->grid->folded) return &sys->frame->foldicon;
+        return image ? &image->Bitmap() : nullptr;
     }
 
     size_t EstimatedMemoryUse() {
@@ -929,8 +933,8 @@ struct Text {
         if (!cell->tiny) sys->ImageSize(DisplayImage(), ixs, iys);
 
         if (ixs && iys) {
-            sys->ImageDraw(DisplayImage(), dc, bx + 1 + g_margin_extra,
-                           by + (cell->tys - iys) / 2 + g_margin_extra);
+            sys->ImageDraw(SourceImage(), dc, bx + 1 + g_margin_extra,
+                           by + (cell->tys - iys) / 2 + g_margin_extra, ixs, iys);
             ixs += 2;
             iys += 2;
         }

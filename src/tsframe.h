@@ -1,5 +1,12 @@
 struct TSFrame : wxFrame {
     static constexpr int toolbarlayoutversion = 4;
+    static constexpr int status_message_field = 0;
+    static constexpr int status_edited_field = 1;
+    static constexpr int status_width_field = 2;
+    static constexpr int status_size_field = 3;
+    static constexpr int status_zoom_field = 4;
+    static constexpr int status_cells_field = 5;
+    static constexpr int status_field_count = 6;
     TSApp *app;
     wxIcon icon;
     wxTaskBarIcon taskbaricon;
@@ -847,8 +854,8 @@ struct TSFrame : wxFrame {
         #endif
         SetMenuBar(menubar);
 
-        auto sb = CreateStatusBar(5);
-        SetStatusBarPane(0);
+        auto sb = CreateStatusBar(status_field_count);
+        SetStatusBarPane(status_message_field);
         SetDPIAwareStatusWidths();
         sb->Show(sys->showstatusbar);
 
@@ -3437,6 +3444,7 @@ struct TSFrame : wxFrame {
         auto canvas = static_cast<TSCanvas *>(notebook->GetPage(nbe.GetSelection()));
         ClearStatus();
         sys->TabChange(canvas->doc.get());
+        UpdateZoomStatus(canvas->doc.get());
         RevealCurrentDocumentInExplorerIfVisible();
         nbe.Skip();
     }
@@ -3838,8 +3846,9 @@ struct TSFrame : wxFrame {
     }
 
     void SetDPIAwareStatusWidths() {
-        int statusbarfieldwidths[] = {-1, FromDIP(300), FromDIP(120), FromDIP(100), FromDIP(150)};
-        SetStatusWidths(5, statusbarfieldwidths);
+        int statusbarfieldwidths[] = {-1, FromDIP(300), FromDIP(120), FromDIP(100),
+                                      FromDIP(130), FromDIP(150)};
+        SetStatusWidths(status_field_count, statusbarfieldwidths);
     }
 
     void SetFileAssoc(const wxString &exename) {
@@ -3873,11 +3882,11 @@ struct TSFrame : wxFrame {
     #endif
 
     void SetStatus(const wxString &message) {
-        if (GetStatusBar() && !message.IsEmpty()) SetStatusText(message, 0);
+        if (GetStatusBar() && !message.IsEmpty()) SetStatusText(message, status_message_field);
     }
 
     void ClearStatus() {
-        if (GetStatusBar()) SetStatusText("", 0);
+        if (GetStatusBar()) SetStatusText("", status_message_field);
     }
 
     void TabsReset() {
@@ -3890,15 +3899,30 @@ struct TSFrame : wxFrame {
     void UpdateStatus(const Selection &s, bool updateamount) {
         if (GetStatusBar()) {
             if (Cell *c = s.GetCell(); c && s.xs) {
-                SetStatusText(wxString::Format(_("Size %d"), -c->text.relsize), 3);
-                SetStatusText(wxString::Format(_("Width %d"), s.grid->colwidths[s.x]), 2);
+                SetStatusText(wxString::Format(_("Size %d"), -c->text.relsize),
+                              status_size_field);
+                SetStatusText(wxString::Format(_("Width %d"), s.grid->colwidths[s.x]),
+                              status_width_field);
                 SetStatusText(wxString::Format(_("Edited %s %s"), c->text.lastedit.FormatDate(),
                                                c->text.lastedit.FormatTime()),
-                              1);
+                              status_edited_field);
             } else
-                for (int field : {1, 2, 3}) SetStatusText("", field);
-            if (updateamount) SetStatusText(wxString::Format(_("%d cell(s)"), s.xs * s.ys), 4);
+                for (int field : {status_edited_field, status_width_field, status_size_field})
+                    SetStatusText("", field);
+            UpdateZoomStatus();
+            if (updateamount)
+                SetStatusText(wxString::Format(_("%d cell(s)"), s.xs * s.ys),
+                              status_cells_field);
         }
+    }
+
+    void UpdateZoomStatus(Document *doc = nullptr) {
+        if (!GetStatusBar()) return;
+        if (!doc) {
+            auto canvas = GetCurrentTab();
+            if (canvas) doc = canvas->doc.get();
+        }
+        SetStatusText(doc ? doc->ZoomStatusText() : wxString(), status_zoom_field);
     }
 
     DECLARE_EVENT_TABLE()

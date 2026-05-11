@@ -1,6 +1,7 @@
 struct Image {
     vector<uint8_t> data;
     char type;
+    wxBitmap bm_source;
     wxBitmap bm_display;
     int trefc {0};
     int savedindex {-1};
@@ -16,23 +17,49 @@ struct Image {
     Image(auto _hash, auto _sc, auto &&_data, auto _type)
         : hash(_hash), display_scale(_sc), data(std::move(_data)), type(_type) {}
 
+    void ResetBitmapCache() {
+        bm_source = wxNullBitmap;
+        bm_display = wxNullBitmap;
+        pixel_width = 0;
+    }
+
+    void ReplaceData(auto &&_data, char _type) {
+        data = std::move(_data);
+        type = _type;
+        hash = CalculateHash(data);
+        ResetBitmapCache();
+    }
+
     void ImageRescale(double scale) {
         auto &[it, mime] = imagetypes.at(type);
         auto im = ConvertBufferToWxImage(data, it);
-        im.Rescale(im.GetWidth() * scale, im.GetHeight() * scale);
-        data = ConvertWxImageToBuffer(im, it);
-        hash = CalculateHash(data);
+        im.Rescale(max(1, static_cast<int>(std::lround(im.GetWidth() * scale))),
+                   max(1, static_cast<int>(std::lround(im.GetHeight() * scale))),
+                   wxIMAGE_QUALITY_HIGH);
+        ReplaceData(ConvertWxImageToBuffer(im, it), type);
+    }
+
+    wxBitmap &Bitmap() {
+        if (!bm_source.IsOk()) {
+            auto &[it, mime] = imagetypes.at(type);
+            bm_source = ConvertBufferToWxBitmap(data, it);
+            pixel_width = bm_source.GetWidth();
+        }
+        return bm_source;
+    }
+
+    void ResetDisplayCache() {
         bm_display = wxNullBitmap;
     }
 
     void DisplayScale(double scale) {
         display_scale /= scale;
-        bm_display = wxNullBitmap;
+        ResetDisplayCache();
     }
 
     void ResetScale(double scale) {
         display_scale = scale;
-        bm_display = wxNullBitmap;
+        ResetDisplayCache();
     }
 
     wxBitmap &Display() {
@@ -40,8 +67,7 @@ struct Image {
         // so this function must not touch any global resources
         // and callees must be thread-safe.
         if (!bm_display.IsOk()) {
-            auto &[it, mime] = imagetypes.at(type);
-            auto bm = ConvertBufferToWxBitmap(data, it);
+            auto &bm = Bitmap();
             pixel_width = bm.GetWidth();
             auto dpi_scale = sys->frame ? sys->frame->FromDIP(1.0) : 1.0;
             ScaleBitmap(bm, dpi_scale / display_scale, bm_display);

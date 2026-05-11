@@ -643,6 +643,37 @@ struct Document {
         return;
     }
 
+    int ZoomDepth() const { return static_cast<int>(drawpath.size()); }
+
+    wxString ZoomStatusText() const {
+        auto depth = ZoomDepth();
+        return depth ? wxString::Format(_("Zoom: Depth %d"), depth) : wxString(_("Zoom: Root"));
+    }
+
+    wxString ZoomPathCellLabel(Cell *cell, const Selection &selection) const {
+        wxString label = cell ? cell->text.t : wxString();
+        label.Replace("\r", " ");
+        label.Replace("\n", " ");
+        label.Trim(true).Trim(false);
+        if (label.IsEmpty())
+            label = wxString::Format("[%d,%d]", selection.x + 1, selection.y + 1);
+        if (label.Len() > 24) label = label.Left(21) + "...";
+        return label;
+    }
+
+    wxString ZoomStatusDetails() const {
+        wxString path = _("Root");
+        Cell *cell = root.get();
+        loopvrev(i, drawpath) {
+            const Selection &selection = drawpath[i];
+            if (!cell || !cell->grid) break;
+            auto child = cell->grid->C(selection.x, selection.y).get();
+            path += " > " + ZoomPathCellLabel(child, selection);
+            cell = child;
+        }
+        return drawpath.empty() ? ZoomStatusText() : ZoomStatusText() + " (" + path + ")";
+    }
+
     bool ZoomSetDrawPath(int dir, bool fromroot = true) {
         int oldlen = drawpath.size();
         int targetlen = max(0, (fromroot ? 0 : oldlen) + dir);
@@ -661,8 +692,11 @@ struct Document {
         return drawpath.size() != oldlen;
     }
 
-    void Zoom(int dir, bool fromroot = false) {
-        if (!ZoomSetDrawPath(dir, fromroot)) return;
+    bool Zoom(int dir, bool fromroot = false) {
+        if (!ZoomSetDrawPath(dir, fromroot)) {
+            if (sys->frame) sys->frame->UpdateZoomStatus(this);
+            return false;
+        }
         auto drawroot = WalkPath(drawpath);
         if (selected.GetCell() == drawroot && drawroot->grid) {
             // We can't have the drawroot selected, so we must move the selection to the children.
@@ -672,6 +706,8 @@ struct Document {
         drawroot->ResetChildren();
         paintscrolltoselection = true;
         canvas->Refresh();
+        if (sys->frame) sys->frame->UpdateZoomStatus(this);
+        return true;
     }
 
     wxString NoSel() { return _("This operation requires a selection."); }
@@ -719,8 +755,13 @@ struct Document {
         } else if (ctrl) {
             int steps = abs(dir);
             dir = sign(dir);
-            loop(i, steps) Zoom(dir);
-            return dir > 0 ? _("Zoomed in.") : _("Zoomed out.");
+            int changed = 0;
+            loop(i, steps) if (Zoom(dir)) changed++;
+            if (!changed)
+                return (dir > 0 ? _("No deeper zoom level.") : _("Already at root zoom level.")) +
+                       " " + ZoomStatusText();
+            return (dir > 0 ? _("Zoomed in.") : _("Zoomed out.")) + " " +
+                   ZoomStatusDetails();
         } else {
             ASSERT(0);
             return wxEmptyString;
@@ -2235,16 +2276,16 @@ struct Document {
                     auto image = c->text.image;
                     if (action == A_SAVE_AS_JPEG && image && image->type == 'I') {
                         auto transferimage = ConvertBufferToWxImage(image->data, wxBITMAP_TYPE_PNG);
-                        image->data = ConvertWxImageToBuffer(transferimage, wxBITMAP_TYPE_JPEG);
-                        image->type = 'J';
+                        image->ReplaceData(ConvertWxImageToBuffer(transferimage, wxBITMAP_TYPE_JPEG),
+                                           'J');
                         returnmessage =
                             _("Images in selected cells have been converted to JPEG format.");
                     }
                     if (action == A_SAVE_AS_PNG && image && image->type == 'J') {
                         auto transferimage =
                             ConvertBufferToWxImage(image->data, wxBITMAP_TYPE_JPEG);
-                        image->data = ConvertWxImageToBuffer(transferimage, wxBITMAP_TYPE_PNG);
-                        image->type = 'I';
+                        image->ReplaceData(ConvertWxImageToBuffer(transferimage, wxBITMAP_TYPE_PNG),
+                                           'I');
                         returnmessage =
                             _("Images in selected cells have been converted to PNG format.");
                     }

@@ -677,5 +677,35 @@ struct System {
         ys = bm->GetHeight();
     }
 
-    void ImageDraw(wxBitmap *bm, wxDC &dc, int x, int y) { dc.DrawBitmap(*bm, x, y); }
+    void ImageDraw(wxBitmap *bm, wxDC &dc, int x, int y, int width = -1, int height = -1) {
+        if (!bm) return;
+        if (width < 0) width = bm->GetWidth();
+        if (height < 0) height = bm->GetHeight();
+
+        double xscale = 1.0;
+        double yscale = 1.0;
+        dc.GetUserScale(&xscale, &yscale);
+        auto scaled =
+            width != bm->GetWidth() || height != bm->GetHeight() ||
+            std::abs(xscale - 1.0) > 0.000001 || std::abs(yscale - 1.0) > 0.000001;
+
+        #if wxUSE_GRAPHICS_CONTEXT
+            if (scaled) {
+                unique_ptr<wxGraphicsContext> gc(wxGraphicsContext::CreateFromUnknownDC(dc));
+                if (gc) {
+                    gc->SetInterpolationQuality(wxINTERPOLATION_BEST);
+                    gc->DrawBitmap(*bm, x, y, width, height);
+                    return;
+                }
+            }
+        #endif
+
+        if (width != bm->GetWidth() || height != bm->GetHeight()) {
+            wxBitmap scaledbitmap;
+            ScaleBitmapToSize(*bm, width, height, scaledbitmap);
+            dc.DrawBitmap(scaledbitmap, x, y);
+        } else {
+            dc.DrawBitmap(*bm, x, y);
+        }
+    }
 };

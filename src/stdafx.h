@@ -48,6 +48,7 @@
 #include <wx/filename.h>
 #include <wx/fontdlg.h>
 #include <wx/fswatcher.h>
+#include <wx/graphics.h>
 #include <wx/ipc.h>
 #include <wx/mstream.h>
 #include <wx/notebook.h>

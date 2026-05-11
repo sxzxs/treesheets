@@ -1,4 +1,5 @@
 #include "stdafx.h"
+#include <wx/graphics.h>
 #include <IbPinyin/pinyin.hpp>
 
 static const auto TS_VERSION = 30;

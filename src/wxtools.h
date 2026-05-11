@@ -203,9 +203,20 @@ struct ImageDropdown : wxOwnerDrawnComboBox {
     }
 };
 
+static void ScaleBitmapToSize(const wxBitmap &source, int width, int height,
+                              wxBitmap &destination) {
+    width = max(1, width);
+    height = max(1, height);
+    if (source.GetWidth() == width && source.GetHeight() == height) {
+        destination = source;
+        return;
+    }
+    destination = wxBitmap(source.ConvertToImage().Scale(width, height, wxIMAGE_QUALITY_HIGH));
+}
+
 static void ScaleBitmap(const wxBitmap &source, double scale, wxBitmap &destination) {
-    destination = wxBitmap(source.ConvertToImage().Scale(
-        source.GetWidth() * scale, source.GetHeight() * scale, wxIMAGE_QUALITY_HIGH));
+    ScaleBitmapToSize(source, static_cast<int>(std::lround(source.GetWidth() * scale)),
+                      static_cast<int>(std::lround(source.GetHeight() * scale)), destination);
 }
 
 static vector<uint8_t> ConvertWxImageToBuffer(const wxImage &image, wxBitmapType bitmaptype) {
