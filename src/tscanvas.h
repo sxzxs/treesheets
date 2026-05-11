@@ -4,18 +4,24 @@ struct TSCanvas : public wxScrolledCanvas {
     int mousewheelaccum {0};
     bool lastrmbwaswithctrl {false};
     bool altenterhandled {false};
+    bool spacepanactive {false};
+    bool spacepandragging {false};
     wxPoint lastmousepos;
+    wxPoint spacepanlastpos;
+    wxTimer spacepantimer;
 
     TSCanvas(TSFrame *fr, wxWindow *parent, const wxSize &size = wxDefaultSize)
         : wxScrolledCanvas(parent, wxID_ANY, wxDefaultPosition, size,
                            wxScrolledWindowStyle | wxWANTS_CHARS | wxFULL_REPAINT_ON_RESIZE),
-          frame(fr) {
+          frame(fr),
+          spacepantimer(this) {
         SetBackgroundStyle(wxBG_STYLE_PAINT);
         SetBackgroundColour(*wxWHITE);
         DisableKeyboardScrolling();
         // Without this, canvas does its own scrolling upon mousewheel events, which
         // interferes with our own.
         EnableScrolling(false, false);
+        Bind(wxEVT_TIMER, &TSCanvas::OnSpacePanTimer, this, spacepantimer.GetId());
     }
 
     ~TSCanvas() { frame = nullptr; }
@@ -36,6 +42,11 @@ struct TSCanvas : public wxScrolledCanvas {
     };
 
     void OnMotion(wxMouseEvent &me) {
+        if (EndSpacePanIfReleased()) {
+            lastmousepos = me.GetPosition();
+            return;
+        }
+
         if (doc->image_resize_dragging) {
             if (me.LeftIsDown()) {
                 doc->UpdateImageResize(me.GetX(), me.GetY());
@@ -60,6 +71,20 @@ struct TSCanvas : public wxScrolledCanvas {
                 SetCursor(wxCursor(wxCURSOR_CROSS));
                 if (doc->hover != doc->prev && !doc->hover.Thin())
                     sys->frame->UpdateStatus(doc->hover, false);
+            }
+            lastmousepos = me.GetPosition();
+            return;
+        }
+
+        if (spacepanactive) {
+            if (me.LeftIsDown()) {
+                if (!spacepandragging) BeginSpacePanDrag(me.GetPosition());
+                wxPoint p = me.GetPosition() - spacepanlastpos;
+                CursorScroll(-p.x, -p.y);
+                spacepanlastpos = me.GetPosition();
+            } else {
+                EndSpacePanDrag();
+                SetSpacePanCursor();
             }
             lastmousepos = me.GetPosition();
             return;
@@ -122,6 +147,12 @@ struct TSCanvas : public wxScrolledCanvas {
         if (frame->filter) frame->filter->SetFocus();
         #endif
         SetFocus();
+        if (spacepanactive) {
+            if (!EndSpacePanIfReleased()) {
+                BeginSpacePanDrag(me.GetPosition());
+                return;
+            }
+        }
         if (frame->borderpaintmode) {
             wxInfoDC dc(this);
             doc->UpdateHover(dc, me.GetX(), me.GetY());
@@ -146,6 +177,13 @@ struct TSCanvas : public wxScrolledCanvas {
     }
 
     void OnLeftUp(wxMouseEvent &me) {
+        if (spacepanactive || spacepandragging) {
+            if (!EndSpacePanIfReleased()) {
+                EndSpacePanDrag();
+                SetSpacePanCursor();
+            }
+            return;
+        }
         if (doc->FinishImageResize()) {
             if (HasCapture()) ReleaseMouse();
             sys->frame->UpdateStatus(doc->selected, true);
@@ -202,22 +240,113 @@ struct TSCanvas : public wxScrolledCanvas {
         return !unprocessed;
     }
 
+    bool IsPlainSpace(wxKeyEvent &ce) const {
+        return ce.GetKeyCode() == WXK_SPACE && !ce.AltDown() && !ce.CmdDown() && !ce.ShiftDown();
+    }
+
+    bool SpacePanAvailable() const {
+        return doc && !doc->selected.TextEdit() && !doc->image_resize_dragging &&
+               !frame->borderpaintmode;
+    }
+
+    bool SpaceKeyStillDown() const {
+        #ifdef __WXMSW__
+            return (::GetAsyncKeyState(VK_SPACE) & 0x8000) != 0;
+        #else
+            return wxGetKeyState(WXK_SPACE);
+        #endif
+    }
+
+    bool SpacePanShouldContinue() const { return SpacePanAvailable() && SpaceKeyStillDown(); }
+
+    bool EndSpacePanIfReleased() {
+        if (!spacepanactive && !spacepandragging) return false;
+        if (spacepanactive && SpacePanShouldContinue()) return false;
+        EndSpacePan();
+        return true;
+    }
+
+    void SetCursorNow(wxStockCursor cursor) {
+        wxCursor c(cursor);
+        #ifdef __WXMSW__
+            ::SetCursor((HCURSOR)c.GetHCURSOR());
+        #endif
+        SetCursor(c);
+    }
+
+    void SetSpacePanCursor() {
+        SetCursorNow(spacepandragging ? wxCURSOR_CLOSED_HAND : wxCURSOR_OPEN_HAND);
+    }
+
+    void RestoreCursorAfterSpacePan() {
+        if (doc) doc->ResetCursor();
+        SetCursorNow(doc && doc->selected.TextEdit() ? wxCURSOR_IBEAM : wxCURSOR_ARROW);
+    }
+
+    void BeginSpacePan() {
+        if (!SpacePanAvailable()) return;
+        spacepanactive = true;
+        if (!spacepantimer.IsRunning()) spacepantimer.Start(30);
+        SetSpacePanCursor();
+    }
+
+    void BeginSpacePanDrag(const wxPoint &pos) {
+        if (!spacepanactive) BeginSpacePan();
+        if (!spacepanactive) return;
+        spacepandragging = true;
+        spacepanlastpos = pos;
+        SetSpacePanCursor();
+        if (!HasCapture()) CaptureMouse();
+    }
+
+    void EndSpacePanDrag() {
+        if (!spacepandragging) return;
+        spacepandragging = false;
+        if (HasCapture()) ReleaseMouse();
+    }
+
+    void EndSpacePan() {
+        if (!spacepanactive && !spacepandragging) return;
+        auto wasdragging = spacepandragging;
+        spacepandragging = false;
+        spacepanactive = false;
+        if (spacepantimer.IsRunning()) spacepantimer.Stop();
+        if (wasdragging && HasCapture()) ReleaseMouse();
+        RestoreCursorAfterSpacePan();
+    }
+
+    bool HandleSpacePanKeyDown(wxKeyEvent &ce) {
+        if (!IsPlainSpace(ce) || !SpacePanAvailable()) return false;
+        BeginSpacePan();
+        return true;
+    }
+
     void OnCharHook(wxKeyEvent &ce) {
         if (HandleAltEnter(ce)) return;
+        if (HandleSpacePanKeyDown(ce)) return;
         ce.Skip();
     }
 
     void OnKeyDown(wxKeyEvent &ce) {
         if (HandleAltEnter(ce)) return;
+        if (HandleSpacePanKeyDown(ce)) return;
         ce.Skip();
     }
     void OnKeyUp(wxKeyEvent &ce) {
         auto key = ce.GetKeyCode();
         if (key == WXK_RETURN || key == WXK_NUMPAD_ENTER) altenterhandled = false;
+        if (key == WXK_SPACE) {
+            EndSpacePan();
+            return;
+        }
         ce.Skip();
     }
     void OnChar(wxKeyEvent &ce) {
         if (HandleAltEnter(ce)) return;
+        if (IsPlainSpace(ce) && (spacepanactive || SpacePanAvailable())) {
+            BeginSpacePan();
+            return;
+        }
         /*
         if (sys->insidefiledialog)
         {
@@ -284,6 +413,36 @@ struct TSCanvas : public wxScrolledCanvas {
         } else {
             PopupMenu(frame->editmenupopup);
         }
+    }
+
+    void OnKillFocus(wxFocusEvent &event) {
+        EndSpacePan();
+        event.Skip();
+    }
+
+    void OnMouseCaptureLost(wxMouseCaptureLostEvent &) {
+        spacepandragging = false;
+        if (!spacepanactive) return;
+        if (SpacePanShouldContinue())
+            SetSpacePanCursor();
+        else
+            EndSpacePan();
+    }
+
+    void OnSetCursor(wxSetCursorEvent &event) {
+        if (!spacepanactive) {
+            event.Skip();
+            return;
+        }
+        event.SetCursor(wxCursor(spacepandragging ? wxCURSOR_CLOSED_HAND : wxCURSOR_OPEN_HAND));
+    }
+
+    void OnSpacePanTimer(wxTimerEvent &) {
+        if (!spacepanactive) {
+            if (spacepantimer.IsRunning()) spacepantimer.Stop();
+            return;
+        }
+        EndSpacePanIfReleased();
     }
 
     void OnScrollWin(wxScrollWinEvent &swe) {
