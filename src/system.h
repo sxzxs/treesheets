@@ -98,6 +98,15 @@ struct System {
         cfg->Read("fswatch", &fswatch, fswatch);
         cfg->Read("casesensitivesearch", &casesensitivesearch, casesensitivesearch);
         cfg->Read("defaultfontsize", &g_deftextsize, g_deftextsize);
+        g_mintextsize_limit = max(g_textsize_lower_bound,
+                                  g_deftextsize - g_mintextsize_delta_default);
+        g_maxtextsize_limit = min(g_textsize_upper_bound,
+                                  g_deftextsize + g_maxtextsize_delta_default);
+        cfg->Read("mintextsize", &g_mintextsize_limit, g_mintextsize_limit);
+        cfg->Read("maxtextsize", &g_maxtextsize_limit, g_maxtextsize_limit);
+        ClampTextSizeLimits();
+        cfg->Read("minimagescalepercent", &g_minimagescale_percent, g_minimagescale_percent);
+        ClampImageScaleLimit();
         cfg->Read("customcolor", &customcolor, customcolor);
         cfg->Read("cursorcolor", &cursorcolor, cursorcolor);
         cfg->Read("showtoolbar", &showtoolbar, showtoolbar);

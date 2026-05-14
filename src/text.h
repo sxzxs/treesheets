@@ -40,7 +40,12 @@ struct Text {
 
     static double ClampImageScale(double scale) {
         if (!std::isfinite(scale)) return 1.0;
-        return max(0.05, min(scale, 20.0));
+        return max(g_minimagescale(), min(scale, 20.0));
+    }
+
+    static double ImageScaleForRelSizeChange(int dir) {
+        static constexpr double image_scale_step = 1.08;
+        return dir ? std::pow(image_scale_step, -dir) : 1.0;
     }
 
     double EffectiveImageDisplayScale() const {
@@ -447,6 +452,7 @@ struct Text {
     auto RelSize(int dir, int zoomdepth) {
         relsize = max(min(relsize + dir, g_deftextsize - g_mintextsize() + zoomdepth),
                       g_deftextsize - g_maxtextsize() - zoomdepth);
+        if (image) ScaleImageDisplay(ImageScaleForRelSizeChange(dir));
     }
 
     auto IsWord(wxChar c) { return wxIsalnum(c) || wxStrchr(L"_\"\'()", c) || wxIspunct(c); }

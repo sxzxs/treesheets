@@ -440,6 +440,8 @@ struct TSFrame : wxFrame {
 
             auto imgmenu = new wxMenu();
             MyAppend(imgmenu, A_IMAGE, _("&Add..."), _("Add an image to the selected cell"));
+            MyAppend(imgmenu, A_VIEWIMAGE, _("&View..."),
+                     _("View the selected image centered outside the grid."));
             MyAppend(imgmenu, A_IMAGESVA, _("&Save as..."),
                      _("Save image(s) from selected cell(s) to disk. Multiple images will be saved with a counter appended to each file name."));
             imgmenu->AppendSeparator();
@@ -691,6 +693,10 @@ struct TSFrame : wxFrame {
                  _("Set the font the document text is displayed with"));
         MyAppend(optmenu, A_SET_FIXED_FONT, _("Typewriter font..."),
                  _("Set the font the typewriter text is displayed with."));
+        MyAppend(optmenu, A_TEXTSIZELIMITS, _("Text size limits..."),
+                 _("Set the smallest and largest text size used by Shift+mousewheel"));
+        MyAppend(optmenu, A_MINIMAGESCALE, _("Minimum image scale..."),
+                 _("Set the smallest display size for images"));
         MyAppend(optmenu, A_CUSTKEY, _("Key bindings..."),
                  _("Change the key binding of a menu item"));
         MyAppend(optmenu, A_SETLANG, _("Change language..."), _("Change interface language"));
@@ -2502,6 +2508,7 @@ struct TSFrame : wxFrame {
             DisplayScale,
             OneToOne,
             SaveImage,
+            ViewImage,
             PreviousSearch,
             BorderPaint,
         };
@@ -2770,6 +2777,13 @@ struct TSFrame : wxFrame {
                     Line(11, 12, 15, 15, 1);
                     ArrowDown(12, 15, 21);
                     break;
+                case ToolbarGlyph::ViewImage:
+                    Rect(4, 5, 13, 10);
+                    Circle(14, 15, 4);
+                    Line(17, 18, 21, 22);
+                    Line(7, 14, 10, 11, 1);
+                    Line(10, 11, 13, 13, 1);
+                    break;
                 case ToolbarGlyph::PreviousSearch:
                     Circle(10, 10, 5);
                     Line(14, 14, 19, 19);
@@ -2964,6 +2978,8 @@ struct TSFrame : wxFrame {
         AddGlyphTool(imagetb, ToolbarGlyph::OneToOne, A_IMAGESCN, _("Reset display scale"));
         AddGlyphTool(imagetb, ToolbarGlyph::SaveImage, A_IMAGESVA,
                      _("Save selected image"));
+        AddGlyphTool(imagetb, ToolbarGlyph::ViewImage, A_VIEWIMAGE,
+                     _("View selected image"));
         AddToolbarIcon(imagetb, _("Run"), wxID_EXECUTE, "run.svg", "run_dark.svg");
 
         auto findtb = NewToolbar();
@@ -3326,6 +3342,48 @@ struct TSFrame : wxFrame {
                                             _("Width"), _("Default column width"),
                                             sys->defaultmaxcolwidth, 1, 1000, sys->frame);
                 if (w > 0) sys->cfg->Write("defaultmaxcolwidth", sys->defaultmaxcolwidth = w);
+                break;
+            }
+
+            case A_TEXTSIZELIMITS: {
+                auto minsize = wxGetNumberFromUser(
+                    _("Please enter the smallest text size:"), _("Points"),
+                    _("Text size limits"), g_mintextsize(), g_textsize_lower_bound, g_deftextsize,
+                    sys->frame);
+                if (minsize < 0) break;
+                auto maxsize = wxGetNumberFromUser(
+                    _("Please enter the largest text size:"), _("Points"),
+                    _("Text size limits"), max(g_maxtextsize(), static_cast<int>(minsize)),
+                    max(g_deftextsize, static_cast<int>(minsize)),
+                    g_textsize_upper_bound, sys->frame);
+                if (maxsize < 0) break;
+                g_mintextsize_limit = static_cast<int>(minsize);
+                g_maxtextsize_limit = static_cast<int>(maxsize);
+                ClampTextSizeLimits();
+                sys->cfg->Write("mintextsize", static_cast<long>(g_mintextsize()));
+                sys->cfg->Write("maxtextsize", static_cast<long>(g_maxtextsize()));
+                TabsReset();
+                Refresh();
+                SetStatus(wxString::Format(_("Text size limits set to %d-%d pt."),
+                                           g_mintextsize(), g_maxtextsize()));
+                break;
+            }
+
+            case A_MINIMAGESCALE: {
+                auto scale = wxGetNumberFromUser(
+                    _("Please enter the minimum image display scale:"), _("%"),
+                    _("Minimum image scale"), g_minimagescale_percent,
+                    g_minimagescale_percent_lower_bound, g_minimagescale_percent_upper_bound,
+                    sys->frame);
+                if (scale < 0) break;
+                g_minimagescale_percent = static_cast<int>(scale);
+                ClampImageScaleLimit();
+                sys->cfg->Write("minimagescalepercent",
+                                static_cast<long>(g_minimagescale_percent));
+                TabsReset();
+                Refresh();
+                SetStatus(wxString::Format(_("Minimum image scale set to %d%%."),
+                                           g_minimagescale_percent));
                 break;
             }
 

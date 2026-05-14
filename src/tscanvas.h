@@ -47,6 +47,19 @@ struct TSCanvas : public wxScrolledCanvas {
             return;
         }
 
+        if (doc->ImageViewerActive()) {
+            if (me.LeftIsDown()) {
+                if (!doc->image_viewer_dragging) doc->BeginImageViewerDrag(me.GetPosition());
+                doc->UpdateImageViewerDrag(me.GetPosition());
+            } else {
+                doc->FinishImageViewerDrag();
+                if (HasCapture()) ReleaseMouse();
+            }
+            SetCursorNow(doc->image_viewer_dragging ? wxCURSOR_CLOSED_HAND : wxCURSOR_OPEN_HAND);
+            lastmousepos = me.GetPosition();
+            return;
+        }
+
         if (doc->image_resize_dragging) {
             if (me.LeftIsDown()) {
                 doc->UpdateImageResize(me.GetX(), me.GetY());
@@ -147,6 +160,12 @@ struct TSCanvas : public wxScrolledCanvas {
         if (frame->filter) frame->filter->SetFocus();
         #endif
         SetFocus();
+        if (doc->ImageViewerActive()) {
+            doc->BeginImageViewerDrag(me.GetPosition());
+            if (!HasCapture()) CaptureMouse();
+            SetCursorNow(wxCURSOR_CLOSED_HAND);
+            return;
+        }
         if (spacepanactive) {
             if (!EndSpacePanIfReleased()) {
                 BeginSpacePanDrag(me.GetPosition());
@@ -177,6 +196,13 @@ struct TSCanvas : public wxScrolledCanvas {
     }
 
     void OnLeftUp(wxMouseEvent &me) {
+        if (doc->ImageViewerActive()) {
+            doc->FinishImageViewerDrag();
+            if (HasCapture()) ReleaseMouse();
+            SetCursorNow(wxCURSOR_OPEN_HAND);
+            Refresh();
+            return;
+        }
         if (spacepanactive || spacepandragging) {
             if (!EndSpacePanIfReleased()) {
                 EndSpacePanDrag();
@@ -207,6 +233,7 @@ struct TSCanvas : public wxScrolledCanvas {
 
     void OnRightDown(wxMouseEvent &me) {
         SetFocus();
+        if (doc->ImageViewerActive()) return;
         SelectClick(me.GetX(), me.GetY(), true, 0);
         lastrmbwaswithctrl = me.CmdDown();
         #ifndef __WXMSW__
@@ -215,6 +242,7 @@ struct TSCanvas : public wxScrolledCanvas {
     }
 
     void OnLeftDoubleClick(wxMouseEvent &me) {
+        if (doc->ImageViewerActive()) return;
         if (frame->borderpaintmode) return;
         wxInfoDC dc(this);
         doc->UpdateHover(dc, me.GetX(), me.GetY());
@@ -245,8 +273,8 @@ struct TSCanvas : public wxScrolledCanvas {
     }
 
     bool SpacePanAvailable() const {
-        return doc && !doc->selected.TextEdit() && !doc->image_resize_dragging &&
-               !frame->borderpaintmode;
+        return doc && !doc->ImageViewerActive() && !doc->selected.TextEdit() &&
+               !doc->image_resize_dragging && !frame->borderpaintmode;
     }
 
     bool SpaceKeyStillDown() const {
@@ -321,13 +349,23 @@ struct TSCanvas : public wxScrolledCanvas {
         return true;
     }
 
+    bool HandleImageViewerKeyDown(wxKeyEvent &ce) {
+        if (!doc || !doc->ImageViewerActive() || ce.GetKeyCode() != WXK_ESCAPE) return false;
+        doc->CloseImageViewer();
+        SetCursorNow(wxCURSOR_ARROW);
+        sys->frame->SetStatus(_("Image viewer closed."));
+        return true;
+    }
+
     void OnCharHook(wxKeyEvent &ce) {
+        if (HandleImageViewerKeyDown(ce)) return;
         if (HandleAltEnter(ce)) return;
         if (HandleSpacePanKeyDown(ce)) return;
         ce.Skip();
     }
 
     void OnKeyDown(wxKeyEvent &ce) {
+        if (HandleImageViewerKeyDown(ce)) return;
         if (HandleAltEnter(ce)) return;
         if (HandleSpacePanKeyDown(ce)) return;
         ce.Skip();
@@ -342,6 +380,7 @@ struct TSCanvas : public wxScrolledCanvas {
         ce.Skip();
     }
     void OnChar(wxKeyEvent &ce) {
+        if (HandleImageViewerKeyDown(ce)) return;
         if (HandleAltEnter(ce)) return;
         if (IsPlainSpace(ce) && (spacepanactive || SpacePanAvailable())) {
             BeginSpacePan();
@@ -373,6 +412,17 @@ struct TSCanvas : public wxScrolledCanvas {
     }
 
     void OnMouseWheel(wxMouseEvent &me) {
+        if (doc->ImageViewerActive()) {
+            mousewheelaccum += me.GetWheelRotation();
+            int steps = mousewheelaccum / me.GetWheelDelta();
+            if (!steps) return;
+            mousewheelaccum -= steps * me.GetWheelDelta();
+            if (doc->ZoomImageViewer(steps, me.GetPosition()))
+                sys->frame->SetStatus(wxString::Format(
+                    _("Image viewer scale: %d%%"),
+                    static_cast<int>(std::lround(doc->image_viewer_scale * 100))));
+            return;
+        }
         bool ctrl = me.CmdDown();
         if (sys->zoomscroll) ctrl = !ctrl;
         if (me.AltDown() || ctrl || me.ShiftDown()) {
@@ -390,6 +440,7 @@ struct TSCanvas : public wxScrolledCanvas {
 
     void OnSize(wxSizeEvent &se) {}
     void OnContextMenuClick(wxContextMenuEvent &cme) {
+        if (doc->ImageViewerActive()) return;
         if (lastrmbwaswithctrl) {
             auto tagmenu = make_unique<wxMenu>();
             doc->RecreateTagMenu(*tagmenu);
@@ -398,6 +449,7 @@ struct TSCanvas : public wxScrolledCanvas {
             wxMenu imagemenu;
             imagemenu.Append(wxID_COPY, _("Copy Image"));
             imagemenu.Append(wxID_CUT, _("Cut Image"));
+            imagemenu.Append(A_VIEWIMAGE, _("View Image"));
             imagemenu.Append(A_IMAGER, _("Remove Image"));
             imagemenu.AppendSeparator();
             imagemenu.Append(A_IMAGESVA, _("Save Image As..."));
@@ -417,10 +469,12 @@ struct TSCanvas : public wxScrolledCanvas {
 
     void OnKillFocus(wxFocusEvent &event) {
         EndSpacePan();
+        if (doc) doc->FinishImageViewerDrag();
         event.Skip();
     }
 
     void OnMouseCaptureLost(wxMouseCaptureLostEvent &) {
+        if (doc) doc->FinishImageViewerDrag();
         spacepandragging = false;
         if (!spacepanactive) return;
         if (SpacePanShouldContinue())
@@ -430,6 +484,11 @@ struct TSCanvas : public wxScrolledCanvas {
     }
 
     void OnSetCursor(wxSetCursorEvent &event) {
+        if (doc && doc->ImageViewerActive()) {
+            event.SetCursor(wxCursor(doc->image_viewer_dragging ? wxCURSOR_CLOSED_HAND
+                                                                : wxCURSOR_OPEN_HAND));
+            return;
+        }
         if (!spacepanactive) {
             event.Skip();
             return;

@@ -13,8 +13,13 @@ static const auto g_scrollratecursor = 240;  // FIXME: must be configurable
 static const auto g_scrollratewheel = 2;  // relative to 1 step on a fixed wheel usually being 120
 static const auto g_max_launches = 20;
 static const auto g_deftextsize_default = 12;
-static const auto g_mintextsize_delta = 8;
-static const auto g_maxtextsize_delta = 32;
+static const auto g_mintextsize_delta_default = 8;
+static const auto g_maxtextsize_delta_default = 32;
+static const auto g_textsize_lower_bound = 1;
+static const auto g_textsize_upper_bound = 200;
+static const auto g_minimagescale_percent_default = 5;
+static const auto g_minimagescale_percent_lower_bound = 1;
+static const auto g_minimagescale_percent_upper_bound = 100;
 static const auto BLINK_TIME = 400;
 static const auto CUSTOMCOLORIDX = 0;
 static const auto TS_SELECTION_MASK = 0x80;
@@ -35,8 +40,27 @@ static const std::map<char, pair<wxBitmapType, wxString>> imagetypes = {
     {'I', {wxBITMAP_TYPE_PNG, "image/png"}}, {'J', {wxBITMAP_TYPE_JPEG, "image/jpeg"}}};
 
 static auto g_deftextsize = g_deftextsize_default;
-static int g_mintextsize() { return g_deftextsize - g_mintextsize_delta; }
-static int g_maxtextsize() { return g_deftextsize + g_maxtextsize_delta; }
+static auto g_mintextsize_limit = g_deftextsize_default - g_mintextsize_delta_default;
+static auto g_maxtextsize_limit = g_deftextsize_default + g_maxtextsize_delta_default;
+static void ClampTextSizeLimits() {
+    g_mintextsize_limit =
+        min(g_deftextsize, max(g_textsize_lower_bound, g_mintextsize_limit));
+    g_maxtextsize_limit =
+        min(g_textsize_upper_bound,
+            max(g_deftextsize, max(g_mintextsize_limit, g_maxtextsize_limit)));
+}
+static int g_mintextsize() { return g_mintextsize_limit; }
+static int g_maxtextsize() { return g_maxtextsize_limit; }
+static int g_textsize_for(int depth, int relsize, int pathscalebias) {
+    return max(g_mintextsize(), g_deftextsize - depth - relsize + pathscalebias);
+}
+static auto g_minimagescale_percent = g_minimagescale_percent_default;
+static void ClampImageScaleLimit() {
+    g_minimagescale_percent = min(g_minimagescale_percent_upper_bound,
+                                  max(g_minimagescale_percent_lower_bound,
+                                      g_minimagescale_percent));
+}
+static double g_minimagescale() { return g_minimagescale_percent / 100.0; }
 
 enum { TS_TEXT = 0, TS_GRID = 1, TS_BOTH = 2, TS_NEITHER = 3 };
 
@@ -312,6 +336,9 @@ enum {
     A_TABCOPYPATH,
     A_TABCOPYRELPATH,
     A_TABREVEAL,
+    A_VIEWIMAGE,
+    A_TEXTSIZELIMITS,
+    A_MINIMAGESCALE,
     A_TAGSET = 1000,  // and all values from here on
     #ifdef ENABLE_LOBSTER
         A_SCRIPT = 2000,  // and all values from here on

@@ -84,6 +84,11 @@ struct Document {
     int image_resize_start_width {0};
     int image_resize_start_height {0};
     wxPoint image_resize_anchor;
+    Image *image_viewer_image {nullptr};
+    double image_viewer_scale {1.0};
+    wxPoint image_viewer_offset;
+    wxPoint image_viewer_last_mouse;
+    bool image_viewer_dragging {false};
     bool borderpaint_undo_added {false};
     Selection borderpaint_last;
     bool searchfilter {false};
@@ -387,6 +392,131 @@ struct Document {
         return true;
     }
 
+    bool ImageViewerActive() const { return image_viewer_image != nullptr; }
+
+    void ResetImageViewer() {
+        image_viewer_image = nullptr;
+        image_viewer_scale = 1.0;
+        image_viewer_offset = wxPoint(0, 0);
+        image_viewer_last_mouse = wxPoint(0, 0);
+        image_viewer_dragging = false;
+    }
+
+    bool CloseImageViewer() {
+        if (!ImageViewerActive()) return false;
+        ResetImageViewer();
+        if (canvas) canvas->Refresh();
+        return true;
+    }
+
+    wxString OpenSelectedImageViewer() {
+        auto cell = SelectedImageCell();
+        if (!cell && selected.grid && !selected.TextEdit()) {
+            auto selected_cell = selected.GetCell();
+            if (selected_cell && selected_cell->text.image) cell = selected_cell;
+        }
+        if (!cell || !cell->text.image) return _("No selected image.");
+
+        image_viewer_image = cell->text.image;
+        image_viewer_scale = 1.0;
+        image_viewer_offset = wxPoint(0, 0);
+        image_viewer_dragging = false;
+        if (canvas) {
+            canvas->SetFocus();
+            canvas->Refresh();
+        }
+        return _("Image viewer opened. Mouse wheel zooms, drag pans, Esc closes.");
+    }
+
+    wxBitmap *ImageViewerBitmap() {
+        if (!image_viewer_image) return nullptr;
+        auto &bitmap = image_viewer_image->Display();
+        return bitmap.IsOk() ? &bitmap : nullptr;
+    }
+
+    wxRect ImageViewerRect() {
+        auto bitmap = ImageViewerBitmap();
+        if (!canvas || !bitmap) return wxRect();
+        image_viewer_scale = Text::ClampImageScale(image_viewer_scale);
+        auto width = max(1, static_cast<int>(std::lround(bitmap->GetWidth() * image_viewer_scale)));
+        auto height =
+            max(1, static_cast<int>(std::lround(bitmap->GetHeight() * image_viewer_scale)));
+        auto client = canvas->GetClientSize();
+        return wxRect((client.GetWidth() - width) / 2 + image_viewer_offset.x,
+                      (client.GetHeight() - height) / 2 + image_viewer_offset.y, width, height);
+    }
+
+    void DrawImageViewer(wxDC &dc) {
+        auto bitmap = ImageViewerBitmap();
+        if (!canvas || !bitmap) return;
+
+        dc.SetUserScale(1, 1);
+        dc.SetDeviceOrigin(0, 0);
+        dc.SetLogicalOrigin(0, 0);
+
+        #if wxUSE_GRAPHICS_CONTEXT
+            {
+                auto client = canvas->GetClientSize();
+                unique_ptr<wxGraphicsContext> gc(wxGraphicsContext::CreateFromUnknownDC(dc));
+                if (gc) {
+                    gc->SetBrush(wxBrush(wxColour(0, 0, 0, 72)));
+                    gc->SetPen(*wxTRANSPARENT_PEN);
+                    gc->DrawRectangle(0, 0, client.GetWidth(), client.GetHeight());
+                }
+            }
+        #endif
+
+        auto rect = ImageViewerRect();
+        sys->ImageDraw(bitmap, dc, rect.x, rect.y, rect.width, rect.height);
+        dc.SetBrush(*wxTRANSPARENT_BRUSH);
+        dc.SetPen(wxPen(LightColor(0x000000), 2));
+        dc.DrawRectangle(rect.x - 1, rect.y - 1, rect.width + 2, rect.height + 2);
+    }
+
+    bool ZoomImageViewer(int steps, const wxPoint &anchor) {
+        if (!ImageViewerActive() || !canvas || !steps) return false;
+        auto old_scale = Text::ClampImageScale(image_viewer_scale);
+        auto new_scale = Text::ClampImageScale(old_scale * std::pow(1.12, steps));
+        if (std::abs(new_scale - old_scale) < 0.000001) return false;
+
+        auto client = canvas->GetClientSize();
+        auto centerx = client.GetWidth() / 2.0;
+        auto centery = client.GetHeight() / 2.0;
+        auto ratio = new_scale / old_scale;
+        image_viewer_offset.x = static_cast<int>(std::lround(
+            image_viewer_offset.x +
+            (anchor.x - centerx - image_viewer_offset.x) * (1.0 - ratio)));
+        image_viewer_offset.y = static_cast<int>(std::lround(
+            image_viewer_offset.y +
+            (anchor.y - centery - image_viewer_offset.y) * (1.0 - ratio)));
+        image_viewer_scale = new_scale;
+        canvas->Refresh();
+        return true;
+    }
+
+    bool BeginImageViewerDrag(const wxPoint &pos) {
+        if (!ImageViewerActive()) return false;
+        image_viewer_dragging = true;
+        image_viewer_last_mouse = pos;
+        return true;
+    }
+
+    bool UpdateImageViewerDrag(const wxPoint &pos) {
+        if (!ImageViewerActive() || !image_viewer_dragging) return false;
+        auto delta = pos - image_viewer_last_mouse;
+        image_viewer_offset.x += delta.x;
+        image_viewer_offset.y += delta.y;
+        image_viewer_last_mouse = pos;
+        if (canvas) canvas->Refresh();
+        return true;
+    }
+
+    bool FinishImageViewerDrag() {
+        if (!image_viewer_dragging) return false;
+        image_viewer_dragging = false;
+        return true;
+    }
+
     void UpdateHover(wxReadOnlyDC &dc, int mx, int my) {
         ResetFont();
         int x, y;
@@ -558,11 +688,13 @@ struct Document {
     bool RemoveSelectedImage() {
         auto cell = SelectedImageCell();
         if (!cell) return false;
+        auto removed_image = cell->text.image;
         cell->AddUndo(this);
         cell->text.image = nullptr;
         cell->text.ResetImageScale();
         cell->text.WasEdited();
         ClearImageSelection();
+        if (image_viewer_image == removed_image) ResetImageViewer();
         if (currentdrawroot) {
             currentdrawroot->ResetChildren();
             currentdrawroot->ResetLayout();
@@ -880,6 +1012,7 @@ struct Document {
                     #endif
                 });
         }
+        DrawImageViewer(dc);
         if (scaledviewingmode) { dc.SetUserScale(1, 1); }
     }
 
@@ -898,9 +1031,7 @@ struct Document {
         while_printing = false;
     }
 
-    int TextSize(int depth, int relsize) {
-        return max(g_mintextsize(), g_deftextsize - depth - relsize + pathscalebias);
-    }
+    int TextSize(int depth, int relsize) { return g_textsize_for(depth, relsize, pathscalebias); }
 
     bool FontIsMini(int textsize) { return textsize == g_mintextsize(); }
 
@@ -1389,7 +1520,10 @@ struct Document {
                 if (wxFontDialog fd(sys->frame, fdat); fd.ShowModal() == wxID_OK) {
                     wxFont font = fd.GetFontData().GetChosenFont();
                     g_deftextsize = min(20, max(10, font.GetPointSize()));
+                    ClampTextSizeLimits();
                     sys->cfg->Write("defaultfontsize", g_deftextsize);
+                    sys->cfg->Write("mintextsize", static_cast<long>(g_mintextsize()));
+                    sys->cfg->Write("maxtextsize", static_cast<long>(g_maxtextsize()));
                     switch (action) {
                         case wxID_SELECT_FONT:
                             sys->defaultfont = font.GetFaceName();
@@ -2238,6 +2372,10 @@ struct Document {
 
             case A_IMAGESCN: {
                 return ScaleSelectedImagesForDisplay(1.0, true);
+            }
+
+            case A_VIEWIMAGE: {
+                return OpenSelectedImageViewer();
             }
 
             case A_IMAGESVA: {
