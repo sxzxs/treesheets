@@ -872,9 +872,51 @@ struct Text {
         // return GetLinePart(i, l, l);     // big word was the last one
     }
 
+    DisplayLine TinyDisplayLine(int maxcolwidth) {
+        DisplayLine best;
+        auto bestlen = -1;
+        auto i = 0;
+        for (;;) {
+            Line line;
+            if (!GetLine(i, maxcolwidth, line)) break;
+            auto display = BuildDisplayLine(line.text);
+            auto len = static_cast<int>(display.text.Len());
+            if (len > bestlen) {
+                best = std::move(display);
+                bestlen = len;
+            }
+        }
+        return best;
+    }
+
+    void DrawTinyDisplayLine(wxDC &dc, const DisplayLine &display, int x, int y) {
+        if (sys->fastrender) {
+            dc.DrawLine(x, y, x + static_cast<int>(display.text.Len()), y);
+            return;
+        }
+
+        auto word = 0;
+        loop(p, static_cast<int>(display.text.Len()) + 1) {
+            if (static_cast<int>(display.text.Len()) <= p || display.text[p] == ' ') {
+                if (word) dc.DrawLine(x + p - word, y, x + p, y);
+                word = 0;
+            } else {
+                word++;
+            }
+        }
+    }
+
     void TextSize(Document *doc, wxReadOnlyDC &dc, int &sx, int &sy, int tiny, int &leftoffset,
                   int maxcolwidth, int depth) {
         sx = sy = 0;
+        if (tiny) {
+            auto display = TinyDisplayLine(maxcolwidth);
+            sx = static_cast<int>(display.text.Len());
+            sy = 1;
+            leftoffset = 1;
+            return;
+        }
+
         auto i = 0;
         for (;;) {
             Line line;
@@ -882,10 +924,7 @@ struct Text {
             auto &curl = line.text;
             auto display = BuildDisplayLine(curl);
             int x, y;
-            if (tiny) {
-                x = static_cast<int>(display.text.Len());
-                y = 1;
-            } else if (display.text.empty()) {
+            if (display.text.empty()) {
                 x = 0;
                 y = dc.GetCharHeight();
             } else if (richstyles.empty()) {
@@ -901,7 +940,7 @@ struct Text {
             sy += y;
             leftoffset = y;
         }
-        if (!tiny) sx += 4;
+        sx += 4;
     }
 
     bool IsInSearch() {
@@ -964,53 +1003,33 @@ struct Text {
                 dc.SetPen(wxPen(LightColor(doc->tags[t])));
             else
                 dc.SetPen(sys->pen_tinytext);
+            DrawTinyDisplayLine(dc, TinyDisplayLine(maxcolwidth), bx + ixs, by);
+            return max(h, iys);
         }
         for (;;) {
             Line line;
             if (!GetLine(i, maxcolwidth, line)) break;
             auto &curl = line.text;
             auto display = BuildDisplayLine(curl);
-            if (cell->tiny) {
-                if (sys->fastrender) {
-                    dc.DrawLine(bx + ixs, by + lines * h,
-                                bx + ixs + static_cast<int>(display.text.Len()), by + lines * h);
-                    /*
-                    wxPoint points[] = { wxPoint(bx + ixs, by + lines * h), wxPoint(bx + ixs +
-                    curl.Len(), by + lines * h) }; dc.DrawLines(1, points, 0, 0);
-                     */
-                } else {
-                    auto word = 0;
-                    loop(p, static_cast<int>(display.text.Len()) + 1) {
-                        if (static_cast<int>(display.text.Len()) <= p || display.text[p] == ' ') {
-                            if (word)
-                                dc.DrawLine(bx + p - word + ixs, by + lines * h, bx + p,
-                                            by + lines * h);
-                            word = 0;
-                        } else
-                            word++;
-                    }
-                }
+            if (searchfound)
+                dc.SetTextForeground(*wxRED);
+            else if (filtered)
+                dc.SetTextForeground(*wxLIGHT_GREY);
+            else if (istag && richstyles.empty())
+                dc.SetTextForeground(LightColor(doc->tags[t]));
+            else if (cell->textcolor && richstyles.empty())
+                dc.SetTextForeground(LightColor(cell->textcolor));  // FIXME: clean up
+            auto tx = bx + 2 + ixs;
+            auto ty = by + lines * h;
+            if (richstyles.empty() || searchfound || filtered) {
+                dc.DrawText(display.text, tx + g_margin_extra, ty + g_margin_extra);
             } else {
-                if (searchfound)
-                    dc.SetTextForeground(*wxRED);
-                else if (filtered)
-                    dc.SetTextForeground(*wxLIGHT_GREY);
-                else if (istag && richstyles.empty())
-                    dc.SetTextForeground(LightColor(doc->tags[t]));
-                else if (cell->textcolor && richstyles.empty())
-                    dc.SetTextForeground(LightColor(cell->textcolor));  // FIXME: clean up
-                auto tx = bx + 2 + ixs;
-                auto ty = by + lines * h;
-                if (richstyles.empty() || searchfound || filtered) {
-                    dc.DrawText(display.text, tx + g_margin_extra, ty + g_margin_extra);
-                } else {
-                    auto basecolor = istag ? doc->tags[t] : cell->textcolor;
-                    DrawStyledTextLine(doc, dc, display, line.start, tx + g_margin_extra,
-                                       ty + g_margin_extra, basecolor);
-                }
-                if (searchfound || filtered || istag || cell->textcolor || !richstyles.empty())
-                    dc.SetTextForeground(LightColor(0x000000));
+                auto basecolor = istag ? doc->tags[t] : cell->textcolor;
+                DrawStyledTextLine(doc, dc, display, line.start, tx + g_margin_extra,
+                                   ty + g_margin_extra, basecolor);
             }
+            if (searchfound || filtered || istag || cell->textcolor || !richstyles.empty())
+                dc.SetTextForeground(LightColor(0x000000));
             lines++;
         }
 

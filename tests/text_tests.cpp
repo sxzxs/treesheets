@@ -83,6 +83,20 @@ void TestSoftWrapKeepsWordsTogether() {
     CHECK_EQ(line.end, 16);
 }
 
+void TestTinyDisplayLineUsesOneLongestWrappedLine() {
+    treesheets::Text text;
+    text.t = "short\nlonger line\nmid";
+
+    auto display = text.TinyDisplayLine(80);
+
+    CHECK_EQ(display.text, wxString("longer line"));
+
+    text.t = "alpha beta gamma";
+    display = text.TinyDisplayLine(10);
+
+    CHECK_EQ(display.text, wxString("alpha beta"));
+}
+
 void TestBackspaceDeletesOneGraphemeCluster() {
     treesheets::Text text;
     text.t = Utf8("a\xCC\x81" "b");
@@ -136,6 +150,7 @@ int main() {
     TestDisplayEscapesControlsAndTabs();
     TestHardLineBreaksAreLines();
     TestSoftWrapKeepsWordsTogether();
+    TestTinyDisplayLineUsesOneLongestWrappedLine();
     TestBackspaceDeletesOneGraphemeCluster();
     TestRichStylesApplyToSelectionAndTrackDeletes();
 

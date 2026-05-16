@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+body { font-family: '微软雅黑', sans-serif; }
+table, th, td { border: 1px solid #A0A0A0; border-collapse: collapse; padding: 3px; vertical-align: top; }
+@media (prefers-color-scheme: dark) {
+  html { filter: invert(1); }
+  img { filter: invert(1); }
+}
+li { }
+</style>
+<title>export of TreeSheets file F:\vs-project\treesheets\TS\examples\astar_structogram.cts</title>
+<meta charset="UTF-8" />
+</head>
+<body style="background-color: #FFFFFF;">
+  <table style="border-width: 2pt; font-size: 13pt;">
+  <tr>
+  <td style="font-weight: bold;background-color: #FFE8D7;">astar(grid, start, goal)
+    <table style="border-width: 2pt; font-size: 12pt;">
+    <tr>
+    <td style="font-weight: normal;background-color: #FFFFFF;">open = priority queue ordered by f
+    </td>
+    </tr>
+    <tr>
+    <td style="font-weight: normal;background-color: #FFFFFF;">g[start] = 0
+    </td>
+    </tr>
+    <tr>
+    <td style="font-weight: normal;background-color: #FFFFFF;">f[start] = h(start, goal)
+    </td>
+    </tr>
+    <tr>
+    <td style="font-weight: normal;background-color: #FFFFFF;">came_from = empty map; closed = empty set
+    </td>
+    </tr>
+    <tr>
+    <td style="font-weight: normal;background-color: #FFFFFF;">open.push((f[start], start))
+    </td>
+    </tr>
+    <tr>
+    <td style="background-color: #CCF1FF;">while open is not empty
+      <table style="border-width: 2pt; font-size: 11pt;">
+      <tr>
+      <td style="font-weight: normal;background-color: #FFFFFF;">current = open.pop_min_f()
+      </td>
+      </tr>
+      <tr>
+      <td style="background-color: #E0E0FF;">if
+        <table style="border-width: 2pt; font-size: 10pt;">
+        <tr>
+        <td style="background-color: #EFF7E9;">current == goal
+        </td>
+        <td>current != goal
+        </td>
+        </tr>
+        <tr>
+        <td style="font-weight: normal;background-color: #FFFFFF;">return reconstruct_path(came_from, current)
+        </td>
+        <td>if
+          <table style="border-width: 2pt; font-size: 9pt;">
+          <tr>
+          <td style="background-color: #F4F4F4;">current in closed
+          </td>
+          <td style="background-color: #EFF7E9;">current not in closed
+          </td>
+          </tr>
+          <tr>
+          <td style="font-weight: normal;background-color: #FFFFFF;">continue
+          </td>
+          <td style="font-weight: normal;background-color: #FFFFFF;">closed.add(current)
+          </td>
+          </tr>
+          <tr>
+          <td style="font-weight: normal;background-color: #FFFFFF;">
+          </td>
+          <td style="background-color: #CCF1FF;">for each neighbor in neighbors4(current)
+            <table style="border-width: 2pt; font-size: 8pt;">
+            <tr>
+            <td style="background-color: #E0E0FF;">if
+              <table style="border-width: 2pt; font-size: 7pt;">
+              <tr>
+              <td>outside(grid, neighbor) or blocked(neighbor)
+              </td>
+              <td style="background-color: #EFF7E9;">walkable(neighbor)
+              </td>
+              </tr>
+              <tr>
+              <td style="font-weight: normal;background-color: #FFFFFF;">continue
+              </td>
+              <td style="font-weight: normal;background-color: #FFFFFF;">tentative = g[current] + cost(current, neighbor)
+              </td>
+              </tr>
+              <tr>
+              <td style="font-weight: normal;background-color: #FFFFFF;">
+              </td>
+              <td>if
+                <table style="border-width: 2pt; font-size: 6pt;">
+                <tr>
+                <td>tentative &lt; g.get(neighbor, INF)
+                </td>
+                <td style="background-color: #F4F4F4;">tentative &gt;= g.get(neighbor, INF)
+                </td>
+                </tr>
+                <tr>
+                <td style="font-weight: normal;background-color: #FFFFFF;">came_from[neighbor] = current
+                </td>
+                <td style="font-weight: normal;background-color: #FFFFFF;">
+                </td>
+                </tr>
+                <tr>
+                <td style="font-weight: normal;background-color: #FFFFFF;">g[neighbor] = tentative
+                </td>
+                <td style="font-weight: normal;background-color: #FFFFFF;">
+                </td>
+                </tr>
+                <tr>
+                <td style="font-weight: normal;background-color: #FFFFFF;">f = tentative + h(neighbor, goal)
+                </td>
+                <td style="font-weight: normal;background-color: #FFFFFF;">
+                </td>
+                </tr>
+                <tr>
+                <td style="font-weight: normal;background-color: #FFFFFF;">open.push((f, neighbor))
+                </td>
+                <td style="font-weight: normal;background-color: #FFFFFF;">
+                </td>
+                </tr>
+                <tr>
+                <td style="font-weight: normal;background-color: #FFFFFF;">best path to neighbor improved
+                </td>
+                <td style="font-weight: normal;background-color: #FFFFFF;">ignore neighbor
+                </td>
+                </tr>
+                </table>
+              </td>
+              </tr>
+              <tr>
+              <td style="font-weight: normal;background-color: #FFFFFF;">
+              </td>
+              <td style="font-weight: normal;background-color: #FFFFFF;">next neighbor
+              </td>
+              </tr>
+              </table>
+            </td>
+            </tr>
+            </table>
+          </td>
+          </tr>
+          <tr>
+          <td style="font-weight: normal;background-color: #FFFFFF;">
+          </td>
+          <td style="font-weight: normal;background-color: #FFFFFF;">all neighbors processed
+          </td>
+          </tr>
+          <tr>
+          <td style="font-weight: normal;background-color: #FFFFFF;">
+          </td>
+          <td style="font-weight: normal;background-color: #FFFFFF;">loop back to while
+          </td>
+          </tr>
+          </table>
+        </td>
+        </tr>
+        <tr>
+        <td style="font-weight: normal;background-color: #FFFFFF;">
+        </td>
+        <td style="font-weight: normal;background-color: #FFFFFF;">search continues
+        </td>
+        </tr>
+        <tr>
+        <td style="font-weight: normal;background-color: #FFFFFF;">
+        </td>
+        <td style="font-weight: normal;background-color: #FFFFFF;">
+        </td>
+        </tr>
+        </table>
+      </td>
+      </tr>
+      <tr>
+      <td style="font-weight: normal;background-color: #FFFFFF;">invariant: closed nodes have final g-score
+      </td>
+      </tr>
+      <tr>
+      <td style="font-weight: normal;background-color: #FFFFFF;">invariant: open contains frontier candidates
+      </td>
+      </tr>
+      <tr>
+      <td style="font-weight: normal;background-color: #FFFFFF;">repeat
+      </td>
+      </tr>
+      </table>
+    </td>
+    </tr>
+    <tr>
+    <td style="background-color: #E0E0FF;">return NO_PATH
+    </td>
+    </tr>
+    </table>
+  </td>
+  </tr>
+  <tr>
+  <td style="font-weight: bold;background-color: #FFE8D7;">reconstruct_path(came_from, current)
+    <table style="border-width: 2pt; font-size: 12pt;">
+    <tr>
+    <td style="font-weight: normal;background-color: #FFFFFF;">path = [current]
+    </td>
+    </tr>
+    <tr>
+    <td style="background-color: #CCF1FF;">while current in came_from
+      <table style="border-width: 2pt; font-size: 11pt;">
+      <tr>
+      <td style="font-weight: normal;background-color: #FFFFFF;">current = came_from[current]
+      </td>
+      </tr>
+      <tr>
+      <td style="font-weight: normal;background-color: #FFFFFF;">path.prepend(current)
+      </td>
+      </tr>
+      </table>
+    </td>
+    </tr>
+    <tr>
+    <td style="background-color: #EFF7E9;">return path
+    </td>
+    </tr>
+    <tr>
+    <td style="font-weight: normal;background-color: #FFFFFF;">
+    </td>
+    </tr>
+    </table>
+  </td>
+  </tr>
+  <tr>
+  <td style="font-weight: bold;background-color: #FFE8D7;">neighbors4(p)
+    <table style="border-width: 2pt; font-size: 12pt;">
+    <tr>
+    <td style="font-weight: normal;background-color: #FFFFFF;">yield (p.x + 1, p.y)
+    </td>
+    </tr>
+    <tr>
+    <td style="font-weight: normal;background-color: #FFFFFF;">yield (p.x - 1, p.y)
+    </td>
+    </tr>
+    <tr>
+    <td style="font-weight: normal;background-color: #FFFFFF;">yield (p.x, p.y + 1)
+    </td>
+    </tr>
+    <tr>
+    <td style="font-weight: normal;background-color: #FFFFFF;">yield (p.x, p.y - 1)
+    </td>
+    </tr>
+    </table>
+  </td>
+  </tr>
+  <tr>
+  <td style="font-weight: bold;background-color: #FFE8D7;">h(a, b) = abs(a.x-b.x) + abs(a.y-b.y)
+  </td>
+  </tr>
+  </table>
+</body>
+</html>

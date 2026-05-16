@@ -854,8 +854,10 @@ struct Document {
         cell->AddUndo(this);
         cell->text.Insert(this, text, selected, false);
         paintscrolltoselection = true;
-        canvas->Refresh();
-        canvas->Update();
+        if (canvas) {
+            canvas->Refresh();
+            canvas->Update();
+        }
         return wxEmptyString;
     }
 
@@ -1231,6 +1233,7 @@ struct Document {
                 case WXK_RETURN:
                 case WXK_NUMPAD_ENTER:
                     if (alt && !ctrl) return TextNewline();
+                    if (selected.TextEdit() && !alt && !ctrl && !shift) return TextNewline();
                     return Action(shift  ? ctrl ? A_ENTERGRIDN : A_ENTERGRID
                                   : ctrl ? A_ENTERCELL_JUMPTOSTART
                                          : A_ENTERCELL);
@@ -2085,15 +2088,17 @@ struct Document {
                 if (!(cell = selected.ThinExpand(this, action == A_ENTERCELL_JUMPTOSTART)))
                     return OneCell();
                 if (selected.TextEdit()) {
+                    if (action == A_ENTERCELL) return TextNewline();
                     selected.Cursor(this, action == A_PROGRESSCELL ? A_RIGHT : A_DOWN, false, false,
                                     true);
                 } else {
+                    auto end = static_cast<int>(cell->text.t.Len());
                     selected.EnterEdit(
                         this,
-                        action == A_ENTERCELL_JUMPTOEND ? static_cast<int>(cell->text.t.Len()) : 0,
-                        static_cast<int>(cell->text.t.Len()));
+                        action == A_ENTERCELL_JUMPTOSTART ? 0 : end,
+                        end);
                     paintscrolltoselection = true;
-                    canvas->Refresh();
+                    if (canvas) canvas->Refresh();
                 }
                 return wxEmptyString;
             }
@@ -2604,11 +2609,8 @@ struct Document {
 
         switch (action) {
             case A_CANCELEDIT:
-                if (LastUndoSameCellTextEdit(cell))
-                    Undo(undolist, redolist);
-                else
-                    if (canvas) canvas->Refresh();
                 selected.ExitEdit(this);
+                if (canvas) canvas->Refresh();
                 return wxEmptyString;
 
             case A_BACKSPACE_WORD:

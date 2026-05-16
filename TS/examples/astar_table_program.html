@@ -1,0 +1,920 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+body { font-family: '微软雅黑', sans-serif; }
+table, th, td { border: 1px solid #A0A0A0; border-collapse: collapse; padding: 3px; vertical-align: top; }
+@media (prefers-color-scheme: dark) {
+  html { filter: invert(1); }
+  img { filter: invert(1); }
+}
+li { }
+</style>
+<title>export of TreeSheets file F:\vs-project\treesheets\TS\examples\astar_table_program.cts</title>
+<meta charset="UTF-8" />
+</head>
+<body style="background-color: #FFFFFF;">
+  <table style="border-width: 2pt; font-size: 13pt;">
+  <tr>
+  <td style="font-weight: bold;background-color: #FFE8D7;">kind
+  </td>
+  <td style="font-weight: bold;background-color: #FFE8D7;">name
+  </td>
+  <td style="font-weight: bold;background-color: #FFE8D7;">params
+  </td>
+  <td style="font-weight: bold;background-color: #FFE8D7;">returns
+  </td>
+  <td style="font-weight: bold;background-color: #FFE8D7;">body
+  </td>
+  </tr>
+  <tr>
+  <td style="font-weight: bold;background-color: #EFF7E9;">fn
+  </td>
+  <td style="font-weight: bold;">astar
+  </td>
+  <td>grid, start, goal
+  </td>
+  <td>path | NO_PATH
+  </td>
+  <td style="font-weight: bold;">{...}
+    <table style="border-width: 2pt; font-size: 12pt;">
+    <tr>
+    <td style="background-color: #FFE8D7;">#
+    </td>
+    <td style="background-color: #FFE8D7;">op
+    </td>
+    <td style="background-color: #FFE8D7;">target
+    </td>
+    <td style="background-color: #FFE8D7;">expr
+    </td>
+    <td style="background-color: #FFE8D7;">block
+    </td>
+    </tr>
+    <tr>
+    <td style="font-weight: normal;">1
+    </td>
+    <td style="font-weight: normal;">let
+    </td>
+    <td style="font-weight: normal;">open
+    </td>
+    <td style="font-weight: normal;">MinHeap()
+    </td>
+    <td style="font-weight: normal;">
+    </td>
+    </tr>
+    <tr>
+    <td style="font-weight: normal;">2
+    </td>
+    <td style="font-weight: normal;">let
+    </td>
+    <td style="font-weight: normal;">seq
+    </td>
+    <td style="font-weight: normal;">Counter()
+    </td>
+    <td style="font-weight: normal;">
+    </td>
+    </tr>
+    <tr>
+    <td style="font-weight: normal;">3
+    </td>
+    <td style="font-weight: normal;">let
+    </td>
+    <td style="font-weight: normal;">g
+    </td>
+    <td style="font-weight: normal;">Map(default=INF)
+    </td>
+    <td style="font-weight: normal;">
+    </td>
+    </tr>
+    <tr>
+    <td style="font-weight: normal;">4
+    </td>
+    <td style="font-weight: normal;">let
+    </td>
+    <td style="font-weight: normal;">f
+    </td>
+    <td style="font-weight: normal;">Map(default=INF)
+    </td>
+    <td style="font-weight: normal;">
+    </td>
+    </tr>
+    <tr>
+    <td style="font-weight: normal;">5
+    </td>
+    <td style="font-weight: normal;">let
+    </td>
+    <td style="font-weight: normal;">came_from
+    </td>
+    <td style="font-weight: normal;">Map()
+    </td>
+    <td style="font-weight: normal;">
+    </td>
+    </tr>
+    <tr>
+    <td style="font-weight: normal;">6
+    </td>
+    <td style="font-weight: normal;">let
+    </td>
+    <td style="font-weight: normal;">closed
+    </td>
+    <td style="font-weight: normal;">Set()
+    </td>
+    <td style="font-weight: normal;">
+    </td>
+    </tr>
+    <tr>
+    <td style="font-weight: normal;">7
+    </td>
+    <td style="font-weight: normal;">set
+    </td>
+    <td style="font-weight: normal;">g[start]
+    </td>
+    <td style="font-weight: normal;">0
+    </td>
+    <td style="font-weight: normal;">
+    </td>
+    </tr>
+    <tr>
+    <td style="font-weight: normal;">8
+    </td>
+    <td style="font-weight: normal;">set
+    </td>
+    <td style="font-weight: normal;">f[start]
+    </td>
+    <td style="font-weight: normal;">h(start, goal)
+    </td>
+    <td style="font-weight: normal;">
+    </td>
+    </tr>
+    <tr>
+    <td style="font-weight: normal;">9
+    </td>
+    <td style="font-weight: normal;">call
+    </td>
+    <td style="font-weight: normal;">open.push
+    </td>
+    <td style="font-weight: normal;">(f[start], seq.next(), start)
+    </td>
+    <td style="font-weight: normal;">
+    </td>
+    </tr>
+    <tr>
+    <td style="background-color: #CCF1FF;">10
+    </td>
+    <td style="background-color: #CCF1FF;">while
+    </td>
+    <td style="font-weight: normal;background-color: #CCF1FF;">
+    </td>
+    <td style="background-color: #CCF1FF;">open.not_empty()
+    </td>
+    <td style="background-color: #CCF1FF;">do
+      <table style="border-width: 2pt; font-size: 11pt;">
+      <tr>
+      <td style="background-color: #FFE8D7;">#
+      </td>
+      <td style="background-color: #FFE8D7;">op
+      </td>
+      <td style="background-color: #FFE8D7;">target
+      </td>
+      <td style="background-color: #FFE8D7;">expr
+      </td>
+      <td style="background-color: #FFE8D7;">block
+      </td>
+      </tr>
+      <tr>
+      <td style="font-weight: normal;background-color: #FFFFFF;">10.1
+      </td>
+      <td style="font-weight: normal;background-color: #FFFFFF;">let
+      </td>
+      <td style="font-weight: normal;background-color: #FFFFFF;">current
+      </td>
+      <td style="font-weight: normal;background-color: #FFFFFF;">open.pop_min().node
+      </td>
+      <td style="font-weight: normal;background-color: #FFFFFF;">
+      </td>
+      </tr>
+      <tr>
+      <td style="background-color: #E0E0FF;">10.2
+      </td>
+      <td style="background-color: #E0E0FF;">if
+      </td>
+      <td style="font-weight: normal;background-color: #E0E0FF;">
+      </td>
+      <td style="background-color: #E0E0FF;">current == goal
+      </td>
+      <td style="background-color: #E0E0FF;">then
+        <table style="border-width: 2pt; font-size: 10pt;">
+        <tr>
+        <td style="background-color: #FFE8D7;">#
+        </td>
+        <td style="background-color: #FFE8D7;">op
+        </td>
+        <td style="background-color: #FFE8D7;">target
+        </td>
+        <td style="background-color: #FFE8D7;">expr
+        </td>
+        <td style="background-color: #FFE8D7;">block
+        </td>
+        </tr>
+        <tr>
+        <td style="background-color: #EFF7E9;">10.2.1
+        </td>
+        <td style="background-color: #EFF7E9;">return
+        </td>
+        <td style="font-weight: normal;background-color: #EFF7E9;">
+        </td>
+        <td style="background-color: #EFF7E9;">reconstruct_path(came_from, current)
+        </td>
+        <td style="font-weight: normal;background-color: #EFF7E9;">
+        </td>
+        </tr>
+        </table>
+      </td>
+      </tr>
+      <tr>
+      <td style="background-color: #E0E0FF;">10.3
+      </td>
+      <td style="background-color: #E0E0FF;">if
+      </td>
+      <td style="font-weight: normal;background-color: #E0E0FF;">
+      </td>
+      <td style="background-color: #E0E0FF;">current in closed
+      </td>
+      <td style="background-color: #E0E0FF;">then
+        <table style="border-width: 2pt; font-size: 10pt;">
+        <tr>
+        <td style="background-color: #FFE8D7;">#
+        </td>
+        <td style="background-color: #FFE8D7;">op
+        </td>
+        <td style="background-color: #FFE8D7;">target
+        </td>
+        <td style="background-color: #FFE8D7;">expr
+        </td>
+        <td style="background-color: #FFE8D7;">block
+        </td>
+        </tr>
+        <tr>
+        <td style="font-weight: normal;background-color: #FFFFFF;">10.3.1
+        </td>
+        <td style="font-weight: normal;background-color: #FFFFFF;">continue
+        </td>
+        <td style="font-weight: normal;background-color: #FFFFFF;">
+        </td>
+        <td style="font-weight: normal;background-color: #FFFFFF;">
+        </td>
+        <td style="font-weight: normal;background-color: #FFFFFF;">
+        </td>
+        </tr>
+        </table>
+      </td>
+      </tr>
+      <tr>
+      <td style="font-weight: normal;background-color: #FFFFFF;">10.4
+      </td>
+      <td style="font-weight: normal;background-color: #FFFFFF;">call
+      </td>
+      <td style="font-weight: normal;background-color: #FFFFFF;">closed.add
+      </td>
+      <td style="font-weight: normal;background-color: #FFFFFF;">current
+      </td>
+      <td style="font-weight: normal;background-color: #FFFFFF;">
+      </td>
+      </tr>
+      <tr>
+      <td>10.5
+      </td>
+      <td>for
+      </td>
+      <td>neighbor
+      </td>
+      <td>neighbors4(current)
+      </td>
+      <td>do
+        <table style="border-width: 2pt; font-size: 10pt;">
+        <tr>
+        <td style="background-color: #FFE8D7;">#
+        </td>
+        <td style="background-color: #FFE8D7;">op
+        </td>
+        <td style="background-color: #FFE8D7;">target
+        </td>
+        <td style="background-color: #FFE8D7;">expr
+        </td>
+        <td style="background-color: #FFE8D7;">block
+        </td>
+        </tr>
+        <tr>
+        <td style="background-color: #E0E0FF;">1
+        </td>
+        <td style="background-color: #E0E0FF;">if
+        </td>
+        <td style="font-weight: normal;background-color: #E0E0FF;">
+        </td>
+        <td style="background-color: #E0E0FF;">out_of_bounds(neighbor, grid)
+        </td>
+        <td style="background-color: #E0E0FF;">then
+          <table style="border-width: 2pt; font-size: 9pt;">
+          <tr>
+          <td style="background-color: #FFE8D7;">#
+          </td>
+          <td style="background-color: #FFE8D7;">op
+          </td>
+          <td style="background-color: #FFE8D7;">target
+          </td>
+          <td style="background-color: #FFE8D7;">expr
+          </td>
+          <td style="background-color: #FFE8D7;">block
+          </td>
+          </tr>
+          <tr>
+          <td style="font-weight: normal;background-color: #FFFFFF;">1.1
+          </td>
+          <td style="font-weight: normal;background-color: #FFFFFF;">continue
+          </td>
+          <td style="font-weight: normal;background-color: #FFFFFF;">
+          </td>
+          <td style="font-weight: normal;background-color: #FFFFFF;">
+          </td>
+          <td style="font-weight: normal;background-color: #FFFFFF;">
+          </td>
+          </tr>
+          </table>
+        </td>
+        </tr>
+        <tr>
+        <td style="background-color: #E0E0FF;">2
+        </td>
+        <td style="background-color: #E0E0FF;">if
+        </td>
+        <td style="font-weight: normal;background-color: #E0E0FF;">
+        </td>
+        <td style="background-color: #E0E0FF;">grid[neighbor] == BLOCKED
+        </td>
+        <td style="background-color: #E0E0FF;">then
+          <table style="border-width: 2pt; font-size: 9pt;">
+          <tr>
+          <td style="background-color: #FFE8D7;">#
+          </td>
+          <td style="background-color: #FFE8D7;">op
+          </td>
+          <td style="background-color: #FFE8D7;">target
+          </td>
+          <td style="background-color: #FFE8D7;">expr
+          </td>
+          <td style="background-color: #FFE8D7;">block
+          </td>
+          </tr>
+          <tr>
+          <td style="font-weight: normal;background-color: #FFFFFF;">2.1
+          </td>
+          <td style="font-weight: normal;background-color: #FFFFFF;">continue
+          </td>
+          <td style="font-weight: normal;background-color: #FFFFFF;">
+          </td>
+          <td style="font-weight: normal;background-color: #FFFFFF;">
+          </td>
+          <td style="font-weight: normal;background-color: #FFFFFF;">
+          </td>
+          </tr>
+          </table>
+        </td>
+        </tr>
+        <tr>
+        <td style="font-weight: normal;background-color: #FFFFFF;">3
+        </td>
+        <td style="font-weight: normal;background-color: #FFFFFF;">let
+        </td>
+        <td style="font-weight: normal;background-color: #FFFFFF;">tentative_g
+        </td>
+        <td style="font-weight: normal;background-color: #FFFFFF;">g[current] + cost(current, neighbor)
+        </td>
+        <td style="font-weight: normal;background-color: #FFFFFF;">
+        </td>
+        </tr>
+        <tr>
+        <td style="background-color: #E0E0FF;">4
+        </td>
+        <td style="background-color: #E0E0FF;">if
+        </td>
+        <td style="font-weight: normal;background-color: #E0E0FF;">
+        </td>
+        <td style="background-color: #E0E0FF;">tentative_g &lt; get(g, neighbor, INF)
+        </td>
+        <td style="background-color: #E0E0FF;">then
+          <table style="border-width: 2pt; font-size: 9pt;">
+          <tr>
+          <td style="background-color: #FFE8D7;">#
+          </td>
+          <td style="background-color: #FFE8D7;">op
+          </td>
+          <td style="background-color: #FFE8D7;">target
+          </td>
+          <td style="background-color: #FFE8D7;">expr
+          </td>
+          <td style="background-color: #FFE8D7;">block
+          </td>
+          </tr>
+          <tr>
+          <td style="font-weight: normal;background-color: #FFFFFF;">4.1
+          </td>
+          <td style="font-weight: normal;background-color: #FFFFFF;">set
+          </td>
+          <td style="font-weight: normal;background-color: #FFFFFF;">came_from[neighbor]
+          </td>
+          <td style="font-weight: normal;background-color: #FFFFFF;">current
+          </td>
+          <td style="font-weight: normal;background-color: #FFFFFF;">
+          </td>
+          </tr>
+          <tr>
+          <td style="font-weight: normal;background-color: #FFFFFF;">4.2
+          </td>
+          <td style="font-weight: normal;background-color: #FFFFFF;">set
+          </td>
+          <td style="font-weight: normal;background-color: #FFFFFF;">g[neighbor]
+          </td>
+          <td style="font-weight: normal;background-color: #FFFFFF;">tentative_g
+          </td>
+          <td style="font-weight: normal;background-color: #FFFFFF;">
+          </td>
+          </tr>
+          <tr>
+          <td style="font-weight: normal;background-color: #FFFFFF;">4.3
+          </td>
+          <td style="font-weight: normal;background-color: #FFFFFF;">set
+          </td>
+          <td style="font-weight: normal;background-color: #FFFFFF;">f[neighbor]
+          </td>
+          <td style="font-weight: normal;background-color: #FFFFFF;">tentative_g + h(neighbor, goal)
+          </td>
+          <td style="font-weight: normal;background-color: #FFFFFF;">
+          </td>
+          </tr>
+          <tr>
+          <td style="font-weight: normal;background-color: #FFFFFF;">4.4
+          </td>
+          <td style="font-weight: normal;background-color: #FFFFFF;">call
+          </td>
+          <td style="font-weight: normal;background-color: #FFFFFF;">open.push
+          </td>
+          <td style="font-weight: normal;background-color: #FFFFFF;">(f[neighbor], seq.next(), neighbor)
+          </td>
+          <td style="font-weight: normal;background-color: #FFFFFF;">
+          </td>
+          </tr>
+          <tr>
+          <td style="font-weight: normal;background-color: #FFFFFF;">4.5
+          </td>
+          <td style="font-weight: normal;background-color: #FFFFFF;">set
+          </td>
+          <td style="font-weight: normal;background-color: #FFFFFF;">seen[neighbor]
+          </td>
+          <td style="font-weight: normal;background-color: #FFFFFF;">true
+          </td>
+          <td style="font-weight: normal;background-color: #FFFFFF;">
+          </td>
+          </tr>
+          </table>
+        </td>
+        </tr>
+        <tr>
+        <td style="font-weight: normal;background-color: #FFFFFF;">5
+        </td>
+        <td style="font-weight: normal;background-color: #FFFFFF;">else
+        </td>
+        <td style="font-weight: normal;background-color: #FFFFFF;">
+        </td>
+        <td style="font-weight: normal;background-color: #FFFFFF;">
+        </td>
+        <td style="font-weight: normal;background-color: #FFFFFF;">skip
+          <table style="border-width: 2pt; font-size: 9pt;">
+          <tr>
+          <td style="font-weight: bold;background-color: #FFE8D7;">#
+          </td>
+          <td style="font-weight: bold;background-color: #FFE8D7;">op
+          </td>
+          <td style="font-weight: bold;background-color: #FFE8D7;">target
+          </td>
+          <td style="font-weight: bold;background-color: #FFE8D7;">expr
+          </td>
+          <td style="font-weight: bold;background-color: #FFE8D7;">block
+          </td>
+          </tr>
+          <tr>
+          <td>5.1
+          </td>
+          <td>noop
+          </td>
+          <td>
+          </td>
+          <td>existing path is not worse
+          </td>
+          <td>
+          </td>
+          </tr>
+          </table>
+        </td>
+        </tr>
+        <tr>
+        <td style="font-weight: normal;background-color: #FFFFFF;">6
+        </td>
+        <td style="font-weight: normal;background-color: #FFFFFF;">end
+        </td>
+        <td style="font-weight: normal;background-color: #FFFFFF;">if
+        </td>
+        <td style="font-weight: normal;background-color: #FFFFFF;">relax
+        </td>
+        <td style="font-weight: normal;background-color: #FFFFFF;">
+        </td>
+        </tr>
+        <tr>
+        <td style="font-weight: normal;background-color: #FFFFFF;">7
+        </td>
+        <td style="font-weight: normal;background-color: #FFFFFF;">next
+        </td>
+        <td style="font-weight: normal;background-color: #FFFFFF;">neighbor
+        </td>
+        <td style="font-weight: normal;background-color: #FFFFFF;">
+        </td>
+        <td style="font-weight: normal;background-color: #FFFFFF;">
+        </td>
+        </tr>
+        <tr>
+        <td style="font-weight: normal;background-color: #FFFFFF;">8
+        </td>
+        <td style="font-weight: normal;background-color: #FFFFFF;">end
+        </td>
+        <td style="font-weight: normal;background-color: #FFFFFF;">for
+        </td>
+        <td style="font-weight: normal;background-color: #FFFFFF;">neighbors4(current)
+        </td>
+        <td style="font-weight: normal;background-color: #FFFFFF;">
+        </td>
+        </tr>
+        <tr>
+        <td style="background-color: #EFF7E9;">9
+        </td>
+        <td style="background-color: #EFF7E9;">invariant
+        </td>
+        <td style="font-weight: normal;background-color: #EFF7E9;">
+        </td>
+        <td style="background-color: #EFF7E9;">for every closed node n, g[n] is final
+        </td>
+        <td style="font-weight: normal;background-color: #EFF7E9;">
+        </td>
+        </tr>
+        </table>
+      </td>
+      </tr>
+      <tr>
+      <td style="font-weight: normal;background-color: #FFFFFF;">10.6
+      </td>
+      <td style="font-weight: normal;background-color: #FFFFFF;">end
+      </td>
+      <td style="font-weight: normal;background-color: #FFFFFF;">for
+      </td>
+      <td style="font-weight: normal;background-color: #FFFFFF;">neighbor
+      </td>
+      <td style="font-weight: normal;background-color: #FFFFFF;">
+      </td>
+      </tr>
+      <tr>
+      <td style="font-weight: normal;background-color: #FFFFFF;">10.7
+      </td>
+      <td style="font-weight: normal;background-color: #FFFFFF;">end
+      </td>
+      <td style="font-weight: normal;background-color: #FFFFFF;">while
+      </td>
+      <td style="font-weight: normal;background-color: #FFFFFF;">open.not_empty()
+      </td>
+      <td style="font-weight: normal;background-color: #FFFFFF;">
+      </td>
+      </tr>
+      <tr>
+      <td style="background-color: #E0E0FF;">10.8
+      </td>
+      <td style="background-color: #E0E0FF;">return
+      </td>
+      <td style="font-weight: normal;background-color: #E0E0FF;">
+      </td>
+      <td style="background-color: #E0E0FF;">NO_PATH
+      </td>
+      <td style="font-weight: normal;background-color: #E0E0FF;">
+      </td>
+      </tr>
+      </table>
+    </td>
+    </tr>
+    <tr>
+    <td style="font-weight: normal;">11
+    </td>
+    <td style="font-weight: normal;">end
+    </td>
+    <td style="font-weight: normal;">while
+    </td>
+    <td style="font-weight: normal;">open.not_empty()
+    </td>
+    <td style="font-weight: normal;">
+    </td>
+    </tr>
+    <tr>
+    <td style="background-color: #E0E0FF;">12
+    </td>
+    <td style="background-color: #E0E0FF;">return
+    </td>
+    <td style="font-weight: normal;background-color: #E0E0FF;">
+    </td>
+    <td style="background-color: #E0E0FF;">NO_PATH
+    </td>
+    <td style="font-weight: normal;background-color: #E0E0FF;">
+    </td>
+    </tr>
+    <tr>
+    <td style="background-color: #EFF7E9;">13
+    </td>
+    <td style="background-color: #EFF7E9;">post
+    </td>
+    <td style="background-color: #EFF7E9;">path
+    </td>
+    <td style="background-color: #EFF7E9;">shortest path if h is admissible
+    </td>
+    <td style="font-weight: normal;background-color: #EFF7E9;">
+    </td>
+    </tr>
+    <tr>
+    <td style="font-weight: normal;">14
+    </td>
+    <td style="font-weight: normal;">end
+    </td>
+    <td style="font-weight: normal;">fn
+    </td>
+    <td style="font-weight: normal;">astar
+    </td>
+    <td style="font-weight: normal;">
+    </td>
+    </tr>
+    </table>
+  </td>
+  </tr>
+  <tr>
+  <td style="font-weight: bold;background-color: #EFF7E9;">fn
+  </td>
+  <td style="font-weight: bold;">reconstruct_path
+  </td>
+  <td>came_from, current
+  </td>
+  <td>path
+  </td>
+  <td style="font-weight: bold;">{...}
+    <table style="border-width: 2pt; font-size: 12pt;">
+    <tr>
+    <td style="background-color: #FFE8D7;">#
+    </td>
+    <td style="background-color: #FFE8D7;">op
+    </td>
+    <td style="background-color: #FFE8D7;">target
+    </td>
+    <td style="background-color: #FFE8D7;">expr
+    </td>
+    <td style="background-color: #FFE8D7;">block
+    </td>
+    </tr>
+    <tr>
+    <td style="background-color: #EFF7E9;">1
+    </td>
+    <td style="background-color: #EFF7E9;">return
+    </td>
+    <td style="font-weight: normal;background-color: #EFF7E9;">
+    </td>
+    <td style="background-color: #EFF7E9;">abs(a.x - b.x) + abs(a.y - b.y)
+    </td>
+    <td style="font-weight: normal;background-color: #EFF7E9;">
+    </td>
+    </tr>
+    <tr>
+    <td style="font-weight: normal;">2
+    </td>
+    <td style="font-weight: normal;">end
+    </td>
+    <td style="font-weight: normal;">fn
+    </td>
+    <td style="font-weight: normal;">h
+    </td>
+    <td style="font-weight: normal;">
+      <table style="border-width: 2pt; font-size: 11pt;">
+      <tr>
+      <td style="font-weight: bold;background-color: #FFE8D7;">#
+      </td>
+      <td style="font-weight: bold;background-color: #FFE8D7;">op
+      </td>
+      <td style="font-weight: bold;background-color: #FFE8D7;">target
+      </td>
+      <td style="font-weight: bold;background-color: #FFE8D7;">expr
+      </td>
+      <td style="font-weight: bold;background-color: #FFE8D7;">block
+      </td>
+      </tr>
+      <tr>
+      <td>2.1
+      </td>
+      <td>set
+      </td>
+      <td>current
+      </td>
+      <td>came_from[current]
+      </td>
+      <td>
+      </td>
+      </tr>
+      <tr>
+      <td>2.2
+      </td>
+      <td>call
+      </td>
+      <td>path.prepend
+      </td>
+      <td>current
+      </td>
+      <td>
+      </td>
+      </tr>
+      <tr>
+      <td>2.3
+      </td>
+      <td>end
+      </td>
+      <td>while
+      </td>
+      <td>current in came_from
+      </td>
+      <td>
+      </td>
+      </tr>
+      </table>
+    </td>
+    </tr>
+    <tr>
+    <td style="background-color: #EFF7E9;">3
+    </td>
+    <td style="background-color: #EFF7E9;">return
+    </td>
+    <td style="font-weight: normal;background-color: #EFF7E9;">
+    </td>
+    <td style="background-color: #EFF7E9;">path
+    </td>
+    <td style="font-weight: normal;background-color: #EFF7E9;">
+    </td>
+    </tr>
+    <tr>
+    <td style="font-weight: normal;">4
+    </td>
+    <td style="font-weight: normal;">end
+    </td>
+    <td style="font-weight: normal;">fn
+    </td>
+    <td style="font-weight: normal;">reconstruct_path
+    </td>
+    <td style="font-weight: normal;">
+    </td>
+    </tr>
+    <tr>
+    <td style="font-weight: normal;">
+    </td>
+    <td style="font-weight: normal;">
+    </td>
+    <td style="font-weight: normal;">
+    </td>
+    <td style="font-weight: normal;">
+    </td>
+    <td style="font-weight: normal;">
+    </td>
+    </tr>
+    <tr>
+    <td style="font-weight: normal;">
+    </td>
+    <td style="font-weight: normal;">
+    </td>
+    <td style="font-weight: normal;">
+    </td>
+    <td style="font-weight: normal;">
+    </td>
+    <td style="font-weight: normal;">
+    </td>
+    </tr>
+    <tr>
+    <td style="font-weight: normal;">
+    </td>
+    <td style="font-weight: normal;">
+    </td>
+    <td style="font-weight: normal;">
+    </td>
+    <td style="font-weight: normal;">
+    </td>
+    <td style="font-weight: normal;">
+    </td>
+    </tr>
+    </table>
+  </td>
+  </tr>
+  <tr>
+  <td style="font-weight: bold;background-color: #EFF7E9;">fn
+  </td>
+  <td style="font-weight: bold;">neighbors4
+  </td>
+  <td>p
+  </td>
+  <td>iterator&lt;point&gt;
+  </td>
+  <td style="font-weight: bold;">{...}
+    <table style="border-width: 2pt; font-size: 12pt;">
+    <tr>
+    <td style="background-color: #FFE8D7;">#
+    </td>
+    <td style="background-color: #FFE8D7;">op
+    </td>
+    <td style="background-color: #FFE8D7;">target
+    </td>
+    <td style="background-color: #FFE8D7;">expr
+    </td>
+    <td style="background-color: #FFE8D7;">block
+    </td>
+    </tr>
+    <tr>
+    <td style="font-weight: normal;">1
+    </td>
+    <td style="font-weight: normal;">yield
+    </td>
+    <td style="font-weight: normal;">
+    </td>
+    <td style="font-weight: normal;">(p.x + 1, p.y)
+    </td>
+    <td style="font-weight: normal;">
+    </td>
+    </tr>
+    <tr>
+    <td style="font-weight: normal;">2
+    </td>
+    <td style="font-weight: normal;">yield
+    </td>
+    <td style="font-weight: normal;">
+    </td>
+    <td style="font-weight: normal;">(p.x - 1, p.y)
+    </td>
+    <td style="font-weight: normal;">
+    </td>
+    </tr>
+    <tr>
+    <td style="font-weight: normal;">3
+    </td>
+    <td style="font-weight: normal;">yield
+    </td>
+    <td style="font-weight: normal;">
+    </td>
+    <td style="font-weight: normal;">(p.x, p.y + 1)
+    </td>
+    <td style="font-weight: normal;">
+    </td>
+    </tr>
+    <tr>
+    <td style="font-weight: normal;">4
+    </td>
+    <td style="font-weight: normal;">yield
+    </td>
+    <td style="font-weight: normal;">
+    </td>
+    <td style="font-weight: normal;">(p.x, p.y - 1)
+    </td>
+    <td style="font-weight: normal;">
+    </td>
+    </tr>
+    <tr>
+    <td style="font-weight: normal;">5
+    </td>
+    <td style="font-weight: normal;">end
+    </td>
+    <td style="font-weight: normal;">fn
+    </td>
+    <td style="font-weight: normal;">neighbors4
+    </td>
+    <td style="font-weight: normal;">
+    </td>
+    </tr>
+    </table>
+  </td>
+  </tr>
+  <tr>
+  <td style="font-weight: bold;background-color: #EFF7E9;">fn
+  </td>
+  <td style="font-weight: bold;">h
+  </td>
+  <td>a, b
+  </td>
+  <td>int
+  </td>
+  <td style="font-weight: bold;">{...}
+  </td>
+  </tr>
+  </table>
+</body>
+</html>

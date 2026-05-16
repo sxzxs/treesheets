@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+body { font-family: '微软雅黑', sans-serif; }
+table, th, td { border: 1px solid #A0A0A0; border-collapse: collapse; padding: 3px; vertical-align: top; }
+@media (prefers-color-scheme: dark) {
+  html { filter: invert(1); }
+  img { filter: invert(1); }
+}
+li { }
+</style>
+<title>export of TreeSheets file F:\vs-project\treesheets\TS\examples\algorithm_table_example.cts</title>
+<meta charset="UTF-8" />
+</head>
+<body style="background-color: #FFFFFF;">
+  <table style="border-width: 2pt; font-size: 13pt;">
+  <tr>
+  <td style="font-weight: bold;background-color: #FFE8D7;">部分
+  </td>
+  <td style="font-weight: bold;background-color: #FFE8D7;">具体内容
+  </td>
+  <td style="font-weight: bold;background-color: #FFE8D7;">伪代码 / 控制流
+  </td>
+  <td style="font-weight: bold;background-color: #FFE8D7;">状态
+  </td>
+  </tr>
+  <tr>
+  <td style="font-weight: bold;background-color: #FFE8D7;">算法
+  </td>
+  <td style="font-weight: bold;">A* 寻路：在有障碍的 8x6 网格中，从 S 找到 G
+  </td>
+  <td>astar(grid, start=(0,0), goal=(6,4))
+  </td>
+  <td>代价=1，启发函数=曼哈顿距离
+  </td>
+  </tr>
+  <tr>
+  <td style="font-weight: bold;background-color: #F4F4F4;">地图
+  </td>
+  <td>S 起点，G 终点，# 障碍，. 可走
+  </td>
+  <td>grid[y][x]
+  </td>
+  <td>展开看具体地图
+    <table style="border-width: 2pt; font-size: 12pt;">
+    <tr>
+    <td style="font-weight: bold;background-color: #C8ECBD;">S
+    </td>
+    <td>.
+    </td>
+    <td>.
+    </td>
+    <td style="background-color: #444444;">#
+    </td>
+    <td>.
+    </td>
+    <td>.
+    </td>
+    <td>.
+    </td>
+    <td>.
+    </td>
+    </tr>
+    <tr>
+    <td>.
+    </td>
+    <td style="background-color: #444444;">#
+    </td>
+    <td>.
+    </td>
+    <td style="background-color: #444444;">#
+    </td>
+    <td>.
+    </td>
+    <td style="background-color: #444444;">#
+    </td>
+    <td style="background-color: #444444;">#
+    </td>
+    <td>.
+    </td>
+    </tr>
+    <tr>
+    <td>.
+    </td>
+    <td style="background-color: #444444;">#
+    </td>
+    <td>.
+    </td>
+    <td>.
+    </td>
+    <td>.
+    </td>
+    <td style="background-color: #444444;">#
+    </td>
+    <td>.
+    </td>
+    <td>.
+    </td>
+    </tr>
+    <tr>
+    <td>.
+    </td>
+    <td>.
+    </td>
+    <td>.
+    </td>
+    <td style="background-color: #444444;">#
+    </td>
+    <td style="background-color: #444444;">#
+    </td>
+    <td style="background-color: #444444;">#
+    </td>
+    <td>.
+    </td>
+    <td>.
+    </td>
+    </tr>
+    <tr>
+    <td style="background-color: #444444;">#
+    </td>
+    <td style="background-color: #444444;">#
+    </td>
+    <td>.
+    </td>
+    <td>.
+    </td>
+    <td>.
+    </td>
+    <td style="background-color: #444444;">#
+    </td>
+    <td style="font-weight: bold;background-color: #D8D8FF;">G
+    </td>
+    <td>.
+    </td>
+    </tr>
+    <tr>
+    <td>.
+    </td>
+    <td>.
+    </td>
+    <td>.
+    </td>
+    <td>.
+    </td>
+    <td>.
+    </td>
+    <td>.
+    </td>
+    <td>.
+    </td>
+    <td>.
+    </td>
+    </tr>
+    </table>
+  </td>
+  </tr>
+  <tr>
+  <td style="font-weight: bold;background-color: #EFF7E9;">初始化
+  </td>
+  <td>open_heap = [(h(S), 0, S)]
+  </td>
+  <td>g[S]=0; came_from={}; closed={}
+  </td>
+  <td>open_heap 按 f = g + h 排序
+  </td>
+  </tr>
+  <tr>
+  <td style="font-weight: bold;background-color: #CCF1FF;">主循环
+  </td>
+  <td style="background-color: #CCF1FF;">while open_heap 非空
+  </td>
+  <td style="background-color: #CCF1FF;">pop 最小 f；判断 goal；扩展邻居
+    <table style="border-width: 2pt; font-size: 12pt;">
+    <tr>
+    <td style="font-weight: bold;background-color: #FFE8D7;">块
+    </td>
+    <td style="font-weight: bold;background-color: #FFE8D7;">条件
+    </td>
+    <td style="font-weight: bold;background-color: #FFE8D7;">语句
+    </td>
+    <td style="font-weight: bold;background-color: #FFE8D7;">效果
+    </td>
+    </tr>
+    <tr>
+    <td style="font-weight: bold;">while
+    </td>
+    <td>open_heap 非空
+    </td>
+    <td style="background-color: #FFFFFF;">current = pop_min_f(open_heap)
+    </td>
+    <td style="background-color: #FFFFFF;">总是扩展当前估价最小的格子
+    </td>
+    </tr>
+    <tr>
+    <td style="font-weight: bold;background-color: #E0E0FF;">if
+    </td>
+    <td style="background-color: #E0E0FF;">current == goal
+    </td>
+    <td style="background-color: #FFFFFF;">return reconstruct_path(came_from, current)
+    </td>
+    <td style="background-color: #FFFFFF;">找到最短路径，提前结束
+    </td>
+    </tr>
+    <tr>
+    <td style="font-weight: bold;background-color: #E0E0FF;">if
+    </td>
+    <td style="background-color: #E0E0FF;">current in closed
+    </td>
+    <td style="background-color: #FFFFFF;">continue
+    </td>
+    <td style="background-color: #FFFFFF;">跳过堆里的旧副本
+    </td>
+    </tr>
+    <tr>
+    <td style="font-weight: bold;background-color: #F4F4F4;">assign
+    </td>
+    <td style="background-color: #FFFFFF;">current not closed
+    </td>
+    <td style="background-color: #FFFFFF;">closed.add(current)
+    </td>
+    <td style="background-color: #FFFFFF;">该格子以后不再扩展
+    </td>
+    </tr>
+    <tr>
+    <td style="font-weight: bold;">for
+    </td>
+    <td>每个可达邻居
+    </td>
+    <td style="background-color: #FFFFFF;">relax(current, neighbor)
+    </td>
+    <td style="background-color: #FFFFFF;">展开看松弛逻辑
+      <table style="border-width: 2pt; font-size: 11pt;">
+      <tr>
+      <td style="font-weight: bold;background-color: #FFE8D7;">块
+      </td>
+      <td style="font-weight: bold;background-color: #FFE8D7;">条件
+      </td>
+      <td style="font-weight: bold;background-color: #FFE8D7;">语句
+      </td>
+      <td style="font-weight: bold;background-color: #FFE8D7;">效果
+      </td>
+      </tr>
+      <tr>
+      <td style="font-weight: bold;background-color: #CCF1FF;">for
+      </td>
+      <td style="background-color: #CCF1FF;">neighbor in four_neighbors(current)
+      </td>
+      <td>依次检查右、左、下、上
+      </td>
+      <td>每个邻居独立判断
+      </td>
+      </tr>
+      <tr>
+      <td style="font-weight: bold;background-color: #E0E0FF;">if
+      </td>
+      <td style="background-color: #E0E0FF;">neighbor 越界 or grid[neighbor] == '#'
+      </td>
+      <td>continue
+      </td>
+      <td>墙和地图外不入堆
+      </td>
+      </tr>
+      <tr>
+      <td style="font-weight: bold;background-color: #F4F4F4;">assign
+      </td>
+      <td>tentative_g = g[current] + 1
+      </td>
+      <td>步长固定为 1
+      </td>
+      <td>候选路径长度
+      </td>
+      </tr>
+      <tr>
+      <td style="font-weight: bold;background-color: #E0E0FF;">if
+      </td>
+      <td style="background-color: #E0E0FF;">tentative_g &lt; g.get(neighbor, INF)
+      </td>
+      <td>came_from[neighbor] = current
+      </td>
+      <td>发现更短路径
+      </td>
+      </tr>
+      <tr>
+      <td style="font-weight: bold;background-color: #EFF7E9;">then
+      </td>
+      <td>更新 g/f 并 push open_heap
+      </td>
+      <td>f = tentative_g + Manhattan(neighbor, goal)
+      </td>
+      <td>后续优先弹出低 f 节点
+      </td>
+      </tr>
+      <tr>
+      <td style="font-weight: bold;background-color: #F4F4F4;">else
+      </td>
+      <td>已有路径更短或相等
+      </td>
+      <td>ignore neighbor
+      </td>
+      <td>不修改父指针
+      </td>
+      </tr>
+      </table>
+    </td>
+    </tr>
+    <tr>
+    <td style="font-weight: bold;background-color: #EFF7E9;">invariant
+    </td>
+    <td style="background-color: #FFFFFF;">closed 中节点的 g 已经最优
+    </td>
+    <td style="background-color: #FFFFFF;">open_heap 保存候选前沿
+    </td>
+    <td style="background-color: #FFFFFF;">came_from 可回溯路径
+    </td>
+    </tr>
+    <tr>
+    <td style="font-weight: bold;background-color: #E0E0FF;">after while
+    </td>
+    <td style="background-color: #FFFFFF;">open_heap 空
+    </td>
+    <td style="background-color: #FFFFFF;">return NO_PATH
+    </td>
+    <td style="background-color: #FFFFFF;">目标不可达
+    </td>
+    </tr>
+    </table>
+  </td>
+  <td style="background-color: #CCF1FF;">展开看完整 while / if / for
+  </td>
+  </tr>
+  <tr>
+  <td style="font-weight: bold;background-color: #E0E0FF;">松弛规则
+  </td>
+  <td style="background-color: #E0E0FF;">if tentative_g &lt; old_g
+  </td>
+  <td>更新 came_from/g/f 并压入堆
+  </td>
+  <td>这是 A* 的核心分支
+  </td>
+  </tr>
+  <tr>
+  <td style="font-weight: bold;background-color: #F4F4F4;">运行片段
+  </td>
+  <td>前几轮 open_heap 如何变化
+  </td>
+  <td>用于检查算法是否按预期推进
+  </td>
+  <td>展开看 trace
+    <table style="border-width: 2pt; font-size: 12pt;">
+    <tr>
+    <td style="font-weight: bold;background-color: #FFE8D7;">迭代
+    </td>
+    <td style="font-weight: bold;background-color: #FFE8D7;">pop current
+    </td>
+    <td style="font-weight: bold;background-color: #FFE8D7;">新增 / 更新 open
+    </td>
+    <td style="font-weight: bold;background-color: #FFE8D7;">说明
+    </td>
+    </tr>
+    <tr>
+    <td style="font-weight: bold;background-color: #F4F4F4;">1
+    </td>
+    <td style="background-color: #C8ECBD;">(0,0) S
+    </td>
+    <td>(1,0) g=1 f=12; (0,1) g=1 f=12
+    </td>
+    <td>两个方向估价相同
+    </td>
+    </tr>
+    <tr>
+    <td style="font-weight: bold;background-color: #F4F4F4;">2
+    </td>
+    <td>(1,0)
+    </td>
+    <td>(2,0) g=2 f=12
+    </td>
+    <td>(1,1) 是墙，跳过
+    </td>
+    </tr>
+    <tr>
+    <td style="font-weight: bold;background-color: #F4F4F4;">3
+    </td>
+    <td>(0,1)
+    </td>
+    <td>(0,2) g=2 f=12
+    </td>
+    <td>(1,1) 是墙，跳过
+    </td>
+    </tr>
+    <tr>
+    <td style="font-weight: bold;background-color: #F4F4F4;">...
+    </td>
+    <td>继续按 f 最小弹出
+    </td>
+    <td>绕过障碍带
+    </td>
+    <td>直到弹出 G
+    </td>
+    </tr>
+    <tr>
+    <td style="font-weight: bold;background-color: #EFF7E9;">end
+    </td>
+    <td style="background-color: #D8D8FF;">(6,4) G
+    </td>
+    <td>reconstruct_path
+    </td>
+    <td>沿 came_from 反向得到路径
+    </td>
+    </tr>
+    </table>
+  </td>
+  </tr>
+  <tr>
+  <td style="font-weight: bold;background-color: #EFF7E9;">重建路径
+  </td>
+  <td>从 goal 沿 came_from 回到 start
+  </td>
+  <td style="background-color: #CCF1FF;">while current in came_from
+    <table style="border-width: 2pt; font-size: 12pt;">
+    <tr>
+    <td style="font-weight: bold;background-color: #FFE8D7;">块
+    </td>
+    <td style="font-weight: bold;background-color: #FFE8D7;">条件
+    </td>
+    <td style="font-weight: bold;background-color: #FFE8D7;">语句
+    </td>
+    <td style="font-weight: bold;background-color: #FFE8D7;">效果
+    </td>
+    </tr>
+    <tr>
+    <td style="font-weight: bold;background-color: #F4F4F4;">init
+    </td>
+    <td style="background-color: #FFFFFF;">current = goal
+    </td>
+    <td style="background-color: #FFFFFF;">path = [goal]
+    </td>
+    <td style="background-color: #FFFFFF;">从终点反推
+    </td>
+    </tr>
+    <tr>
+    <td style="font-weight: bold;">while
+    </td>
+    <td>current in came_from
+    </td>
+    <td style="background-color: #FFFFFF;">current = came_from[current]
+    </td>
+    <td style="background-color: #FFFFFF;">不断回到父节点
+    </td>
+    </tr>
+    <tr>
+    <td style="font-weight: bold;background-color: #F4F4F4;">assign
+    </td>
+    <td style="background-color: #FFFFFF;">each parent
+    </td>
+    <td style="background-color: #FFFFFF;">path.push_front(current)
+    </td>
+    <td style="background-color: #FFFFFF;">路径顺序变成 start -&gt; goal
+    </td>
+    </tr>
+    <tr>
+    <td style="font-weight: bold;background-color: #EFF7E9;">return
+    </td>
+    <td style="background-color: #FFFFFF;">current == start
+    </td>
+    <td style="background-color: #FFFFFF;">return path
+    </td>
+    <td style="background-color: #FFFFFF;">具体坐标序列
+    </td>
+    </tr>
+    </table>
+  </td>
+  <td>返回 start -&gt; goal 坐标列表
+  </td>
+  </tr>
+  </table>
+</body>
+</html>

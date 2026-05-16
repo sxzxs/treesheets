@@ -333,6 +333,61 @@ void TestBackspaceDeleteAndWordEditingActions() {
     CHECK_EQ(doc.root->grid->C(1, 0)->text.t, wxString(""));
 }
 
+void TestPlainEnterInTextEditInsertsLineBreak() {
+    treesheets::Document doc;
+    InitDocument(doc, MakeRoot(1, 1));
+    auto cell = doc.selected.GetCell();
+    cell->text.t = "ab";
+    doc.selected.EnterEdit(&doc, 1, 1);
+
+    bool unprocessed = false;
+    CHECK_EQ(doc.Key(WXK_NONE, WXK_RETURN, false, false, false, unprocessed), wxString(""));
+
+    CHECK(!unprocessed);
+    CHECK_EQ(cell->text.t, wxString("a\nb"));
+    CHECK_EQ(doc.selected.cursor, 2);
+    CHECK_EQ(doc.selected.cursorend, 2);
+    CHECK(doc.selected.TextEdit());
+
+    CHECK_EQ(doc.Action(A_ENTERCELL), wxString(""));
+    CHECK_EQ(cell->text.t, wxString("a\n\nb"));
+    CHECK_EQ(doc.selected.cursor, 3);
+    CHECK_EQ(doc.selected.cursorend, 3);
+}
+
+void TestPlainEnterStartsTextEditAtEnd() {
+    treesheets::Document doc;
+    InitDocument(doc, MakeRoot(1, 1));
+    auto cell = doc.selected.GetCell();
+    cell->text.t = "old";
+
+    bool unprocessed = false;
+    CHECK_EQ(doc.Key(WXK_NONE, WXK_RETURN, false, false, false, unprocessed), wxString(""));
+    CHECK(!unprocessed);
+    CHECK(doc.selected.TextEdit());
+    CHECK_EQ(doc.selected.cursor, 3);
+    CHECK_EQ(doc.selected.cursorend, 3);
+
+    CHECK_EQ(doc.Key('!', '!', false, false, false, unprocessed), wxString(""));
+    CHECK_EQ(cell->text.t, wxString("old!"));
+}
+
+void TestEscapeInTextEditKeepsTypedInput() {
+    treesheets::Document doc;
+    InitDocument(doc, MakeRoot(1, 1));
+    auto cell = doc.selected.GetCell();
+    cell->text.t = "old";
+    doc.selected.EnterEdit(&doc, 3, 3);
+
+    bool unprocessed = false;
+    CHECK_EQ(doc.Key('!', '!', false, false, false, unprocessed), wxString(""));
+    CHECK_EQ(doc.Action(A_CANCELEDIT), wxString(""));
+
+    CHECK_EQ(cell->text.t, wxString("old!"));
+    CHECK(!doc.selected.TextEdit());
+    CHECK_EQ(doc.undolist.size(), static_cast<size_t>(1));
+}
+
 void TestKeyboardNavigationSelectionAndTextRanges() {
     treesheets::Document doc;
     InitDocument(doc, MakeRoot(3, 2));
@@ -945,6 +1000,9 @@ int main() {
     RUN_DOCUMENT_TEST(TestPasteSingleTextReplacesCellAndEntersTextEdit);
     RUN_DOCUMENT_TEST(TestTextEditFormattingAppliesToSelectedTextRangeOnly);
     RUN_DOCUMENT_TEST(TestBackspaceDeleteAndWordEditingActions);
+    RUN_DOCUMENT_TEST(TestPlainEnterInTextEditInsertsLineBreak);
+    RUN_DOCUMENT_TEST(TestPlainEnterStartsTextEditAtEnd);
+    RUN_DOCUMENT_TEST(TestEscapeInTextEditKeepsTypedInput);
     RUN_DOCUMENT_TEST(TestKeyboardNavigationSelectionAndTextRanges);
     RUN_DOCUMENT_TEST(TestPasteTextEditNormalizesLineEndings);
     RUN_DOCUMENT_TEST(TestPasteHTMLTablePreservesSpansTextAndStyles);

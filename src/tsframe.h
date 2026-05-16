@@ -388,17 +388,17 @@ struct TSFrame : wxFrame {
             MyAppend(temenu, A_CHOME, _("Start of text") + "\tCTRL+HOME");
             MyAppend(temenu, A_CEND, _("End of text") + "\tCTRL+END");
             temenu->AppendSeparator();
-            MyAppend(temenu, A_ENTERCELL, _("Enter/exit text edit mode") + "\tENTER");
+            MyAppend(temenu, A_ENTERCELL, _("Enter text edit mode") + "\tENTER");
             MyAppend(temenu, A_ENTERCELL_JUMPTOEND,
                      _("...and jump to the end of the text") + "\tF2");
             MyAppend(
                 temenu, A_ENTERCELL_JUMPTOSTART,
                 _("...and progress to the first cell in the new row") + "\t" ALTORCTRL "+ENTER");
             MyAppend(temenu, A_TEXTNEWLINE,
-                     _("Insert line break in cell text (Alt+Enter)"));
+                     _("Insert line break in cell text (Enter while editing, Alt+Enter)"));
             MyAppend(temenu, A_PROGRESSCELL,
                      _("...and progress to the next cell on the right") + "\t" PROGRESSCELLKEY);
-            MyAppend(temenu, A_CANCELEDIT, _("Cancel text edits") + "\tESC");
+            MyAppend(temenu, A_CANCELEDIT, _("Exit text edit mode") + "\tESC");
 
             auto stmenu = new wxMenu();
             MyAppend(stmenu, wxID_BOLD, _("Toggle cell &BOLD") + "\tCTRL+B");
