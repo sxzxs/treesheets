@@ -103,6 +103,7 @@ struct TSCanvas : public wxScrolledCanvas {
             return;
         }
 
+        auto old_fold_toggle = doc->hover_fold_toggle;
         wxInfoDC dc(this);
         doc->UpdateHover(dc, me.GetX(), me.GetY());
         if (me.LeftIsDown() || me.RightIsDown()) {
@@ -135,8 +136,11 @@ struct TSCanvas : public wxScrolledCanvas {
             if (doc->hover != doc->prev && !doc->hover.Thin()) sys->frame->UpdateStatus(doc->hover, false);
             if (doc->ImageResizeHitTest(me.GetX(), me.GetY()))
                 SetCursor(wxCursor(wxCURSOR_SIZENWSE));
+            else if (doc->hover_fold_toggle)
+                SetCursor(wxCursor(wxCURSOR_HAND));
             else
                 doc->ResetCursor();
+            if (old_fold_toggle != doc->hover_fold_toggle) Refresh();
         }
         lastmousepos = me.GetPosition();
     }
@@ -147,6 +151,15 @@ struct TSCanvas : public wxScrolledCanvas {
             return;  // for some reason, using just the "menu" key sends a right-click at (-1, -1)
         doc->isctrlshiftdrag = isctrlshift;
         doc->UpdateHover(dc, mx, my);
+        if (!right) {
+            auto foldstatus = doc->ToggleFoldAtDevicePoint(mx, my);
+            if (!foldstatus.IsEmpty()) {
+                sys->frame->SetStatus(foldstatus);
+                sys->frame->UpdateStatus(doc->selected, true);
+                Refresh();
+                return;
+            }
+        }
         auto image_hit = doc->ImageCellAtDevicePoint(mx, my) != nullptr;
         doc->SelectClick(right, image_hit);
         sys->frame->UpdateStatus(doc->selected, true);
@@ -246,6 +259,7 @@ struct TSCanvas : public wxScrolledCanvas {
         if (frame->borderpaintmode) return;
         wxInfoDC dc(this);
         doc->UpdateHover(dc, me.GetX(), me.GetY());
+        if (doc->FoldToggleHitTest(me.GetX(), me.GetY())) return;
         doc->DoubleClick();
         sys->frame->UpdateStatus(doc->selected, true);
         Refresh();

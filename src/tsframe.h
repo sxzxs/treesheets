@@ -177,7 +177,7 @@ struct TSFrame : wxFrame {
         MyAppend(expmenu, A_EXPHTMLT, _("&HTML (Tables+Styling)..."),
                  _("Export the current view as HTML using nested tables, that will look somewhat like the TreeSheet"));
         MyAppend(expmenu, A_EXPHTMLTE, _("&HTML (Tables+Styling+Images)..."),
-                 _("Export the curent view as HTML using nested tables and exported images"));
+                 _("Export the current view as a single HTML file using nested tables and embedded images"));
         MyAppend(expmenu, A_EXPHTMLB, _("HTML (&Bullet points)..."),
                  _("Export the current view as HTML as nested bullet points."));
         MyAppend(expmenu, A_EXPHTMLO, _("HTML (&Outline)..."),
@@ -680,7 +680,7 @@ struct TSFrame : wxFrame {
         auto autoexportmenu = new wxMenu();
         autoexportmenu->AppendRadioItem(A_AUTOEXPORT_HTML_NONE, _("No autoexport"));
         autoexportmenu->AppendRadioItem(A_AUTOEXPORT_HTML_WITH_IMAGES, _("Export with images"),
-                                        _("Export to a HTML file with exported images alongside "
+                                        _("Export to a HTML file with embedded images alongside "
                                           "the original TreeSheets file when document is saved"));
         autoexportmenu->AppendRadioItem(A_AUTOEXPORT_HTML_WITHOUT_IMAGES,
                                         _("Export without images"),

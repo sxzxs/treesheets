@@ -30,6 +30,7 @@ struct Document {
     int lasttextsize;
     int laststylebits;
     Cell *currentdrawroot {nullptr};  // for use during Render() calls
+    Cell *hover_fold_toggle {nullptr};
     vector<unique_ptr<UndoItem>> undolist;
     vector<unique_ptr<UndoItem>> redolist;
     vector<Selection> drawpath;
@@ -300,6 +301,118 @@ struct Document {
                        static_cast<int>(y / currentviewscale - centery / currentviewscale));
     }
 
+    wxRect FoldToggleRect(Cell *cell) {
+        if (!cell || !cell->grid || cell == currentdrawroot || cell->tiny) return wxRect();
+        constexpr int handle = 9;
+        if (cell->sx < handle + 4 || cell->sy < handle + 4) return wxRect();
+        return wxRect(cell->GetX(this) + cell->sx - handle - 2, cell->GetY(this) + 2, handle,
+                      handle);
+    }
+
+    Cell *FoldToggleCellAtCell(Cell *cell, const wxPoint &point) {
+        if (!cell) return nullptr;
+        auto rect = FoldToggleRect(cell);
+        if (!rect.IsEmpty() && rect.Contains(point)) return cell;
+        if (cell->GridShown(this)) return FoldToggleCellAtGrid(cell->grid.get(), point);
+        return nullptr;
+    }
+
+    Cell *FoldToggleCellAtGrid(Grid *grid, const wxPoint &point) {
+        if (!grid) return nullptr;
+        foreachcellingrid(c, grid) {
+            if (grid->IsCovered(x, y)) continue;
+            if (auto cell = FoldToggleCellAtCell(c.get(), point)) return cell;
+        }
+        return nullptr;
+    }
+
+    Cell *FoldToggleCellAtDocumentPoint(const wxPoint &point) {
+        auto drawroot = currentdrawroot ? currentdrawroot : WalkPath(drawpath);
+        return drawroot && drawroot->grid ? FoldToggleCellAtGrid(drawroot->grid.get(), point)
+                                          : nullptr;
+    }
+
+    bool FoldToggleHitTest(int mx, int my) {
+        if (!canvas) return false;
+        return FoldToggleCellAtDocumentPoint(DeviceToDocumentPoint(mx, my)) != nullptr;
+    }
+
+    wxString ToggleFoldCell(Cell *cell) {
+        if (!cell || !cell->grid || cell == currentdrawroot) return wxEmptyString;
+        cell->AddUndo(this);
+        cell->grid->folded = !cell->grid->folded;
+        cell->ResetChildren();
+        if (cell->parent) SetSelect(cell->parent->grid->FindCell(cell));
+        hover_fold_toggle = nullptr;
+        paintscrolltoselection = false;
+        if (canvas) canvas->Refresh();
+        return cell->grid->folded ? _("Folded.") : _("Unfolded.");
+    }
+
+    wxString ToggleFoldAtDevicePoint(int mx, int my) {
+        if (!canvas) return wxEmptyString;
+        return ToggleFoldCell(FoldToggleCellAtDocumentPoint(DeviceToDocumentPoint(mx, my)));
+    }
+
+    static uint BlendFoldToggleColor(uint a, uint b, int bweight, int total = 100) {
+        bweight = min(total, max(0, bweight));
+        int aweight = total - bweight;
+        uint out = 0;
+        loop(i, 3) {
+            uint shift = i * 8;
+            uint ac = (a >> shift) & 0xFF;
+            uint bc = (b >> shift) & 0xFF;
+            out |= ((ac * aweight + bc * bweight) / total) << shift;
+        }
+        return out;
+    }
+
+    void DrawFoldToggle(wxDC &dc, Cell *cell) {
+        auto rect = FoldToggleRect(cell);
+        if (rect.IsEmpty()) return;
+        if (rect.GetRight() < scrollx || rect.GetLeft() > maxx || rect.GetBottom() < scrolly ||
+            rect.GetTop() > maxy)
+            return;
+
+        bool hot = cell == hover_fold_toggle;
+        bool selected_cell = selected.GetCell() == cell && !selected.TextEdit();
+        uint background = cell->actualcellcolor;
+        uint ink =
+            BlendFoldToggleColor(background, cell->textcolor, hot ? 70 : selected_cell ? 42 : 22);
+        if (hot || selected_cell) {
+            uint fill = BlendFoldToggleColor(background, 0xFFFFFF, hot ? 16 : 8);
+            uint border = BlendFoldToggleColor(background, cell->textcolor, hot ? 42 : 24);
+            dc.SetBrush(wxBrush(LightColor(fill)));
+            dc.SetPen(wxPen(LightColor(border)));
+            dc.DrawRoundedRectangle(rect, 2);
+        }
+
+        dc.SetPen(wxPen(LightColor(ink)));
+        int left = rect.x + 2;
+        int right = rect.x + rect.width - 3;
+        int top = rect.y + 2;
+        int bottom = rect.y + rect.height - 3;
+        int midx = rect.x + rect.width / 2;
+        int midy = rect.y + rect.height / 2;
+        dc.DrawLine(left, midy, right + 1, midy);
+        if (cell->grid->folded) dc.DrawLine(midx, top, midx, bottom + 1);
+    }
+
+    void DrawFoldTogglesInGrid(wxDC &dc, Grid *grid) {
+        if (!grid) return;
+        foreachcellingrid(c, grid) {
+            if (grid->IsCovered(x, y)) continue;
+            auto cell = c.get();
+            if (cell->GridShown(this)) DrawFoldTogglesInGrid(dc, cell->grid.get());
+            DrawFoldToggle(dc, cell);
+        }
+    }
+
+    void DrawFoldToggles(wxDC &dc) {
+        if (!currentdrawroot || !currentdrawroot->grid) return;
+        DrawFoldTogglesInGrid(dc, currentdrawroot->grid.get());
+    }
+
     Cell *ImageCellAtDevicePoint(int mx, int my) {
         if (!canvas) return nullptr;
         auto cell = hover.GetCell();
@@ -523,11 +636,16 @@ struct Document {
         canvas->CalcUnscrolledPosition(mx, my, &x, &y);
         prev = hover;
         hover = Selection();
+        hover_fold_toggle = nullptr;
         auto drawroot = WalkPath(drawpath);
-        if (drawroot->grid)
+        if (drawroot->grid) {
             drawroot->grid->FindXY(
                 this, x / currentviewscale - centerx / currentviewscale - hierarchysize,
                 y / currentviewscale - centery / currentviewscale - hierarchysize, dc);
+            hover_fold_toggle = FoldToggleCellAtDocumentPoint(
+                wxPoint(static_cast<int>(x / currentviewscale - centerx / currentviewscale),
+                        static_cast<int>(y / currentviewscale - centery / currentviewscale)));
+        }
     }
 
     void ScrollIfSelectionOutOfView(const Selection &sel, int sx, int sy, int mx, int my) {
@@ -1003,6 +1121,7 @@ struct Document {
         ShiftToCenter(dc);
         Render(dc);
         DrawSelect(dc, selected);
+        DrawFoldToggles(dc);
         DrawSelectedImageOutline(dc);
         DrawImageResizeHandle(dc);
         if (paintscrolltoselection) {
@@ -1181,23 +1300,352 @@ struct Document {
                         << "body { font-family: '" << sys->defaultfont << "', sans-serif; }\n"
                         << "table, th, td { border: 1px solid #A0A0A0; border-collapse: collapse;"
                         << " padding: 3px; vertical-align: top; }\n"
+                        << ".ts-export-root { display: inline-block; transform-origin: top left; }\n"
+                        << "td:focus { outline: none; }\n"
+                        << "td.ts-selected { outline: 2px solid rgba(50, 130, 255, 0.75);"
+                        << " outline-offset: -2px; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.75); }\n"
+                        << ".ts-image-resizer { display: inline-block; position: relative;"
+                        << " line-height: 0; max-width: 100%; min-width: 16px;"
+                        << " vertical-align: middle; }\n"
+                        << ".ts-image-resizer > img.ts-cell-image { display: block; width: 100%;"
+                        << " height: auto; max-width: 100%; }\n"
+                        << ".ts-image-resize-handle { position: absolute; right: -2px;"
+                        << " bottom: -2px; width: 5px; height: 5px; border: 1px solid #606060;"
+                        << " background: #F4F4F4; box-sizing: border-box;"
+                        << " cursor: nwse-resize; opacity: 0.5; }\n"
+                        << ".ts-image-resizer:hover > .ts-image-resize-handle { opacity: 0.9; }\n"
+                        << ".ts-cell-header { display: flex; align-items: flex-start; gap: 2px; }\n"
+                        << ".ts-cell-text { min-width: 0; }\n"
+                        << ".ts-fold-toggle { appearance: none; min-width: 1em; width: 1em;"
+                        << " height: 1em; margin-top: 0.1em; padding: 0; border: 0;"
+                        << " background: transparent; color: inherit; opacity: 0.35;"
+                        << " font: inherit; font-size: 0.85em; line-height: 1;"
+                        << " cursor: pointer; }\n"
+                        << "td.ts-cell-with-children:hover > .ts-cell-header > .ts-fold-toggle,"
+                        << ".ts-fold-toggle:focus { opacity: 0.8; }\n"
+                        << ".ts-child-grid { margin-top: 3px; }\n"
+                        << "td.ts-collapsed > .ts-child-grid { display: none; }\n"
                         << "@media (prefers-color-scheme: dark) {\n"
                         << "  html { filter: invert(1); }\n"
                         << "  img { filter: invert(1); }\n"
                         << "}\n"
                         << "li { }\n</style>\n"
+                        << R"TSHTML(<script>
+(function() {
+var tsSelectedCell = null;
+
+function tsArray(list) {
+  return Array.prototype.slice.call(list || []);
+}
+
+function tsVisibleCell(cell) {
+  return !!(cell && cell.offsetParent !== null && cell.getClientRects().length);
+}
+
+function tsVisibleCells(scope) {
+  return tsArray((scope || document).querySelectorAll('td')).filter(tsVisibleCell);
+}
+
+function tsSelectCell(cell) {
+  if (!cell || !tsVisibleCell(cell)) return false;
+  if (tsSelectedCell) tsSelectedCell.classList.remove('ts-selected');
+  tsSelectedCell = cell;
+  tsSelectedCell.classList.add('ts-selected');
+  try {
+    tsSelectedCell.focus({ preventScroll: true });
+  } catch (ignore) {
+    if (tsSelectedCell.focus) tsSelectedCell.focus();
+  }
+  if (tsSelectedCell.scrollIntoView) {
+    tsSelectedCell.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+  return true;
+}
+
+function tsEnsureSelection() {
+  if (tsVisibleCell(tsSelectedCell)) return tsSelectedCell;
+  var cells = tsVisibleCells(document.getElementById('ts-export-root'));
+  return cells.length && tsSelectCell(cells[0]) ? cells[0] : null;
+}
+
+function tsFoldButton(cell) {
+  var header = cell ? cell.firstElementChild : null;
+  if (!header || !header.classList || !header.classList.contains('ts-cell-header')) return null;
+  return header.querySelector('.ts-fold-toggle');
+}
+
+function tsSetCellCollapsed(cell, collapsed) {
+  if (!cell || !cell.classList.contains('ts-cell-with-children')) return false;
+  cell.classList.toggle('ts-collapsed', collapsed);
+  var button = tsFoldButton(cell);
+  if (button) {
+    button.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    button.textContent = collapsed ? '+' : '-';
+  }
+  if (tsSelectedCell && !tsVisibleCell(tsSelectedCell)) tsSelectCell(cell);
+  return true;
+}
+
+function tsToggleCellFold(cell) {
+  if (!cell || !cell.classList.contains('ts-cell-with-children')) return false;
+  return tsSetCellCollapsed(cell, !cell.classList.contains('ts-collapsed'));
+}
+
+function tsToggleSelectedFold() {
+  return tsToggleCellFold(tsEnsureSelection());
+}
+
+function tsSetSelectedFoldRecursive(collapsed) {
+  var cell = tsEnsureSelection();
+  if (!cell || !cell.classList.contains('ts-cell-with-children')) return false;
+  var cells = [cell].concat(tsArray(cell.querySelectorAll('td.ts-cell-with-children')));
+  cells.forEach(function(child) { tsSetCellCollapsed(child, collapsed); });
+  return true;
+}
+
+function tsDirectChildGrid(cell) {
+  for (var child = cell ? cell.firstElementChild : null; child; child = child.nextElementSibling) {
+    if (child.classList && child.classList.contains('ts-child-grid')) return child;
+  }
+  return null;
+}
+
+function tsEnterChildCell() {
+  var cell = tsEnsureSelection();
+  var childGrid = tsDirectChildGrid(cell);
+  if (!childGrid) return false;
+  tsSetCellCollapsed(cell, false);
+  var childCells = tsVisibleCells(childGrid);
+  return childCells.length ? tsSelectCell(childCells[0]) : false;
+}
+
+function tsCellTable(cell) {
+  return cell && cell.parentElement ? cell.parentElement.closest('table') : null;
+}
+
+function tsDirectRows(table) {
+  return tsArray(table ? table.rows : []).filter(function(row) {
+    return row.closest('table') === table;
+  });
+}
+
+function tsCellsForRow(row) {
+  return tsArray(row ? row.cells : []).filter(function(cell) {
+    return cell.parentElement === row;
+  });
+}
+
+function tsMoveGridCell(dx, dy) {
+  var cell = tsEnsureSelection();
+  var table = tsCellTable(cell);
+  var row = cell ? cell.parentElement : null;
+  if (!table || !row) return false;
+  var rows = tsDirectRows(table);
+  var rowIndex = rows.indexOf(row);
+  var cells = tsCellsForRow(row);
+  var cellIndex = cells.indexOf(cell);
+  var target = null;
+  if (dx) {
+    target = cells[cellIndex + dx] || null;
+  } else if (dy) {
+    var targetRow = rows[rowIndex + dy];
+    var targetCells = tsCellsForRow(targetRow);
+    target = targetCells[Math.min(cellIndex, targetCells.length - 1)] || null;
+  }
+  return target ? tsSelectCell(target) : false;
+}
+
+function tsMoveLinear(delta) {
+  var cells = tsVisibleCells(document.getElementById('ts-export-root'));
+  if (!cells.length) return false;
+  var index = cells.indexOf(tsSelectedCell);
+  if (index < 0) index = delta > 0 ? -1 : 0;
+  index = (index + delta + cells.length) % cells.length;
+  return tsSelectCell(cells[index]);
+}
+
+function tsMoveLinearToEdge(last) {
+  var cells = tsVisibleCells(document.getElementById('ts-export-root'));
+  return cells.length ? tsSelectCell(cells[last ? cells.length - 1 : 0]) : false;
+}
+
+function tsMoveRowEdge(last) {
+  var cell = tsEnsureSelection();
+  var cells = tsCellsForRow(cell ? cell.parentElement : null);
+  return cells.length ? tsSelectCell(cells[last ? cells.length - 1 : 0]) : false;
+}
+
+function tsSelectParentCell() {
+  var cell = tsEnsureSelection();
+  var table = tsCellTable(cell);
+  var parent = table ? table.closest('td') : null;
+  return parent ? tsSelectCell(parent) : false;
+}
+
+function tsZoom(dir) {
+  var root = document.getElementById('ts-export-root');
+  if (!root) return false;
+  var zoom = parseFloat(root.dataset.zoom || '1');
+  zoom *= dir > 0 ? 1.1 : 1 / 1.1;
+  zoom = Math.max(0.35, Math.min(zoom, 4));
+  root.dataset.zoom = zoom;
+  root.style.zoom = zoom;
+  return true;
+}
+
+function tsAdjustCellTextSize(cell, dir) {
+  cell = cell || tsEnsureSelection();
+  if (!cell) return false;
+  tsSelectCell(cell);
+  var cells = [cell].concat(tsArray(cell.querySelectorAll('td')));
+  cells.forEach(function(child) {
+    var scale = parseFloat(child.dataset.fontScale || '1');
+    scale *= dir > 0 ? 1.08 : 1 / 1.08;
+    scale = Math.max(0.55, Math.min(scale, 2.4));
+    child.dataset.fontScale = scale;
+    child.style.fontSize = scale + 'em';
+  });
+  return true;
+}
+
+function tsResizeSelectedColumn(dir) {
+  var cell = tsEnsureSelection();
+  var table = tsCellTable(cell);
+  var row = cell ? cell.parentElement : null;
+  if (!table || !row) return false;
+  var index = tsCellsForRow(row).indexOf(cell);
+  if (index < 0) return false;
+  var width = Math.max(16, cell.getBoundingClientRect().width);
+  width *= dir > 0 ? 1.08 : 1 / 1.08;
+  width = Math.max(16, width);
+  tsDirectRows(table).forEach(function(currentRow) {
+    var cells = tsCellsForRow(currentRow);
+    if (cells[index]) cells[index].style.width = width + 'px';
+  });
+  return true;
+}
+
+document.addEventListener('click', function(event) {
+  var button = event.target.closest && event.target.closest('.ts-fold-toggle');
+  if (!button) return;
+  var cell = button.closest('td.ts-cell-with-children');
+  if (!cell) return;
+  event.preventDefault();
+  tsSelectCell(cell);
+  tsToggleCellFold(cell);
+});
+
+document.addEventListener('click', function(event) {
+  if (event.target.closest &&
+      (event.target.closest('.ts-fold-toggle') ||
+       event.target.closest('.ts-image-resize-handle'))) return;
+  var cell = event.target.closest && event.target.closest('td');
+  if (cell) tsSelectCell(cell);
+});
+
+document.addEventListener('dblclick', function(event) {
+  if (event.target.closest &&
+      (event.target.closest('.ts-fold-toggle') ||
+       event.target.closest('.ts-image-resize-handle'))) return;
+  var cell = event.target.closest && event.target.closest('td.ts-cell-with-children');
+  if (cell) {
+    event.preventDefault();
+    tsSelectCell(cell);
+    tsToggleCellFold(cell);
+  }
+});
+
+document.addEventListener('pointerdown', function(event) {
+  var handle = event.target.closest && event.target.closest('.ts-image-resize-handle');
+  if (!handle) return;
+  var box = handle.closest('.ts-image-resizer');
+  if (!box) return;
+  event.preventDefault();
+  var startX = event.clientX;
+  var startWidth = box.getBoundingClientRect().width;
+  function onMove(moveEvent) {
+    var width = Math.max(16, startWidth + moveEvent.clientX - startX);
+    var parentWidth = box.parentElement ? box.parentElement.clientWidth : 0;
+    if (parentWidth) width = Math.min(width, parentWidth);
+    box.style.width = width + 'px';
+  }
+  function onUp() {
+    document.removeEventListener('pointermove', onMove);
+    document.removeEventListener('pointerup', onUp);
+  }
+  document.addEventListener('pointermove', onMove);
+  document.addEventListener('pointerup', onUp);
+});
+
+document.addEventListener('wheel', function(event) {
+  if (event.ctrlKey) {
+    event.preventDefault();
+    tsZoom(event.deltaY < 0 ? 1 : -1);
+    return;
+  }
+  if (event.shiftKey) {
+    var cell = tsSelectedCell || (event.target.closest && event.target.closest('td'));
+    if (!cell) return;
+    event.preventDefault();
+    tsAdjustCellTextSize(cell, event.deltaY < 0 ? 1 : -1);
+    return;
+  }
+  if (event.altKey) {
+    event.preventDefault();
+    tsResizeSelectedColumn(event.deltaY < 0 ? 1 : -1);
+  }
+}, { passive: false });
+
+document.addEventListener('keydown', function(event) {
+  if (event.defaultPrevented) return;
+  var tagName = event.target && event.target.tagName;
+  if (tagName && /^(INPUT|TEXTAREA|SELECT)$/.test(tagName)) return;
+  var handled = false;
+  switch (event.key) {
+    case 'ArrowLeft': handled = tsMoveGridCell(-1, 0); break;
+    case 'ArrowRight': handled = tsMoveGridCell(1, 0); break;
+    case 'ArrowUp': handled = tsMoveGridCell(0, -1); break;
+    case 'ArrowDown': handled = tsMoveGridCell(0, 1); break;
+    case 'Tab': handled = tsMoveLinear(event.shiftKey ? -1 : 1); break;
+    case 'Escape': handled = tsSelectParentCell(); break;
+    case 'Enter': handled = event.shiftKey ? tsEnterChildCell() : tsToggleSelectedFold(); break;
+    case ' ':
+    case 'Spacebar': handled = tsToggleSelectedFold(); break;
+    case 'Home': handled = event.ctrlKey ? tsMoveLinearToEdge(false) : tsMoveRowEdge(false); break;
+    case 'End': handled = event.ctrlKey ? tsMoveLinearToEdge(true) : tsMoveRowEdge(true); break;
+    case 'PageUp':
+      handled = event.ctrlKey ? tsZoom(1) :
+                event.shiftKey ? tsAdjustCellTextSize(null, 1) :
+                event.altKey ? tsResizeSelectedColumn(1) : false;
+      break;
+    case 'PageDown':
+      handled = event.ctrlKey ? tsZoom(-1) :
+                event.shiftKey ? tsAdjustCellTextSize(null, -1) :
+                event.altKey ? tsResizeSelectedColumn(-1) : false;
+      break;
+    case 'F10':
+      handled = event.ctrlKey && event.shiftKey ? tsSetSelectedFoldRecursive(true) :
+                event.ctrlKey && event.altKey ? tsSetSelectedFoldRecursive(false) :
+                tsToggleSelectedFold();
+      break;
+  }
+  if (handled) event.preventDefault();
+});
+})();
+</script>
+)TSHTML"
                         << "<title>export of TreeSheets file " << this->filename
                         << "</title>\n<meta charset=\"UTF-8\" />\n"
                         << "</head>\n<body style=\""
                         << wxString::Format("background-color: #%06X;", SwapColor(root->cellcolor))
-                        << "\">" << content << "</body>\n</html>\n";
+                        << "\"><div id=\"ts-export-root\" class=\"ts-export-root\">" << content
+                        << "</div></body>\n</html>\n";
                     dos.WriteString(output);
                     break;
                 }
                 case A_EXPCSV:
                 case A_EXPTEXT: dos.WriteString(content); break;
             }
-            if (action == A_EXPHTMLTE) ExportAllImages(filename, exportroot);
         }
         return _("File exported successfully.");
     }

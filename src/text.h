@@ -363,13 +363,33 @@ struct Text {
         NormalizeRichStyles();
     }
 
-    wxString htmlify(wxString &str) {
+    static bool IsHTMLExportFormat(int format) {
+        return format == A_EXPHTMLT || format == A_EXPHTMLTI || format == A_EXPHTMLTE ||
+               format == A_EXPHTMLO || format == A_EXPHTMLB;
+    }
+
+    wxString htmlify(const wxString &str, bool preserve_line_breaks = false) {
         wxString r;
-        for (auto cref : str) {
-            switch (wxChar c = cref.GetValue()) {
+        for (size_t i = 0; i < str.Len(); i++) {
+            switch (wxChar c = str[i]) {
                 case '&': r += "&amp;"; break;
                 case '<': r += "&lt;"; break;
                 case '>': r += "&gt;"; break;
+                case '\r':
+                    if (preserve_line_breaks) {
+                        if (i + 1 < str.Len() && str[i + 1] == '\n') i++;
+                        r += "<br />\n";
+                    } else {
+                        r += c;
+                    }
+                    break;
+                case '\n':
+                    if (preserve_line_breaks) {
+                        r += "<br />\n";
+                    } else {
+                        r += c;
+                    }
+                    break;
                 default: r += c;
             }
         }
@@ -406,7 +426,7 @@ struct Text {
             auto next = min(end, NextRichBoundary(pos, end));
             auto rich = RichStyleAt(pos, BaseColor(), stylebits);
             wxString piece = t.Mid(pos, next - pos);
-            piece = htmlify(piece);
+            piece = htmlify(piece, true);
             if (rich.HasAny()) {
                 auto style = HTMLStyleForRichStyle(rich);
                 out += "<span style=\"" + style + "\">" + piece + "</span>";
@@ -418,6 +438,26 @@ struct Text {
         return out;
     }
 
+    double HTMLImageScale() const {
+        auto dpi_scale = sys && sys->frame ? sys->frame->FromDIP(1.0) : 1.0;
+        return image ? dpi_scale / EffectiveImageDisplayScale() : 1.0;
+    }
+
+    wxString HTMLImageElement() {
+        if (!image) return wxEmptyString;
+        auto &bm = image->Bitmap();
+        auto scale = HTMLImageScale();
+        auto width = max(1, static_cast<int>(std::lround(bm.GetWidth() * scale)));
+        auto height = max(1, static_cast<int>(std::lround(bm.GetHeight() * scale)));
+        return wxString("<span class=\"ts-image-resizer\" style=\"") +
+               wxString::Format("width:%dpx;", width) + "\"><img src=\"data:" +
+               imagetypes.at(image->type).second + ";base64," +
+               wxBase64Encode(image->data.data(), image->data.size()) +
+               wxString::Format("\" class=\"ts-cell-image\" width=\"%d\" height=\"%d\" />",
+                                width, height) +
+               "<span class=\"ts-image-resize-handle\"></span></span>";
+    }
+
     wxString ToText(int indent, const Selection &s, int format) {
         int start = 0;
         int end = TextLength();
@@ -426,25 +466,13 @@ struct Text {
             end = max(s.cursor, s.cursorend);
         }
         wxString str = t.Mid(start, end - start);
-        if ((format == A_EXPHTMLT || format == A_EXPHTMLTI || format == A_EXPHTMLTE ||
-             format == A_EXPHTMLO || format == A_EXPHTMLB) &&
-            !richstyles.empty())
+        auto htmlformat = IsHTMLExportFormat(format);
+        if (htmlformat && !richstyles.empty())
             str = RichTextToHTML(start, end);
-        else if (format == A_EXPXML || format == A_EXPHTMLT || format == A_EXPHTMLTI ||
-                 format == A_EXPHTMLTE || format == A_EXPHTMLO || format == A_EXPHTMLB)
-            str = htmlify(str);
-        if (format == A_EXPHTMLTI && image)
-            str.Prepend("<img src=\"data:" + imagetypes.at(image->type).second + ";base64," +
-                        wxBase64Encode(image->data.data(), image->data.size()) + "\" />");
-        else if (format == A_EXPHTMLTE && image) {
-            wxString relsize = wxString::Format(
-                "%d%%",
-                static_cast<int>(100.0 * sys->frame->FromDIP(1.0) /
-                                 EffectiveImageDisplayScale()));
-            str.Prepend("<img src=\"" + wxString::Format("%llu", image->hash) +
-                        image->GetFileExtension() + "\" width=\"" + relsize + "\" height=\"" +
-                        relsize + "\" />");
-        }
+        else if (format == A_EXPXML || htmlformat)
+            str = htmlify(str, htmlformat);
+        if ((format == A_EXPHTMLTI || format == A_EXPHTMLTE) && image)
+            str.Prepend(HTMLImageElement());
         return str;
     };
 

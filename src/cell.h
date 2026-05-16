@@ -337,8 +337,25 @@ struct Cell {
             return "\"" + str + "\"";
         }
         if (sel.cursor != sel.cursorend) return str;
-        str.Append(LINE_SEPARATOR);
-        if (grid) str.Append(grid->ToText(indent, sel, format, doc, inheritstyle, root));
+        auto htmltableformat =
+            format == A_EXPHTMLT || format == A_EXPHTMLTI || format == A_EXPHTMLTE;
+        wxString gridtext;
+        if (grid) gridtext = grid->ToText(indent, sel, format, doc, inheritstyle, root);
+        if (htmltableformat && this != root && grid) {
+            auto expanded = grid->folded ? "false" : "true";
+            auto buttontext = grid->folded ? "+" : "-";
+            wxString header =
+                "<div class=\"ts-cell-header\"><button type=\"button\" "
+                "class=\"ts-fold-toggle\" aria-label=\"Toggle nested table\" "
+                "aria-expanded=\"" +
+                wxString(expanded) + "\">" + wxString(buttontext) + "</button>";
+            if (!str.IsEmpty()) header += "<span class=\"ts-cell-text\">" + str + "</span>";
+            header += "</div>\n";
+            str = header + "<div class=\"ts-child-grid\">\n" + gridtext + "</div>\n";
+        } else {
+            str.Append(LINE_SEPARATOR);
+            str.Append(gridtext);
+        }
         if (format == A_EXPXML) {
             str.Prepend(">");
             if (text.relsize) {
@@ -374,8 +391,7 @@ struct Cell {
             str.Prepend("<cell");
             str.Append(' ', indent);
             str.Append("</cell>\n");
-        } else if ((format == A_EXPHTMLT || format == A_EXPHTMLTI || format == A_EXPHTMLTE) &&
-                   this != root) {
+        } else if (htmltableformat && this != root) {
             wxString style;
             if (!inheritstyle || !parent ||
                 (text.stylebits & STYLE_BOLD) != (parent->text.stylebits & STYLE_BOLD))
@@ -401,8 +417,16 @@ struct Cell {
                 style += wxString::Format("color: #%06X;", SwapColor(exporttextcolor));
             if (!inheritstyle || bordercolor != (parent ? parent->bordercolor : g_bordercolor_default))
                 style += wxString::Format("border-color: #%06X;", SwapColor(bordercolor));
-            str.Prepend(style.IsEmpty() ? wxString("<td>")
-                                        : wxString("<td style=\"") + style + wxString("\">"));
+            wxString classes;
+            if (grid) {
+                classes = "ts-cell-with-children";
+                if (grid->folded) classes += " ts-collapsed";
+            }
+            wxString attributes;
+            if (!classes.IsEmpty()) attributes += " class=\"" + classes + "\"";
+            if (!style.IsEmpty()) attributes += " style=\"" + style + "\"";
+            attributes += " tabindex=\"-1\"";
+            str.Prepend("<td" + attributes + ">");
             str.Append(' ', indent);
             str.Append("</td>\n");
         } else if (format == A_EXPHTMLB && (text.t.Len() || grid) && this != root) {

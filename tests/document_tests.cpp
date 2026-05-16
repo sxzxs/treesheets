@@ -568,6 +568,75 @@ void TestExportFormatsEscapeTextAndPreserveStyles() {
           wxNOT_FOUND);
 }
 
+void TestHTMLExportPreservesCellLineBreaks() {
+    treesheets::Document doc;
+    InitDocument(doc, MakeRoot(2, 1));
+    auto grid = doc.root->grid.get();
+    auto left = grid->C(0, 0).get();
+    auto right = grid->C(1, 0).get();
+
+    left->text.t = "first\nsecond";
+    right->text.t = "rich\r\nsecond";
+    right->text.richstyles.push_back(
+        {0, static_cast<int>(right->text.t.Len()), g_textcolor_default, STYLE_BOLD,
+         treesheets::Text::RICH_STYLE_BITS});
+
+    auto html = grid->ConvertToText(grid->SelectAll(), 0, A_EXPHTMLT, &doc, true, doc.root.get());
+
+    CHECK(html.Find("first<br />\nsecond") != wxNOT_FOUND);
+    CHECK(html.Find("rich<br />\nsecond") != wxNOT_FOUND);
+    CHECK(html.Find("first\nsecond") == wxNOT_FOUND);
+
+    auto xml = grid->ConvertToText(grid->SelectAll(), 0, A_EXPXML, &doc, true, doc.root.get());
+    CHECK(xml.Find("first\nsecond") != wxNOT_FOUND);
+    CHECK(xml.Find("<br />") == wxNOT_FOUND);
+}
+
+void TestHTMLExportAddsFoldControlsForNestedTables() {
+    treesheets::Document doc;
+    InitDocument(doc, MakeRoot(1, 1));
+    auto parent = doc.root->grid->C(0, 0).get();
+    parent->text.t = "parent";
+    parent->AddGrid(1, 1);
+    parent->grid->folded = true;
+    parent->grid->C(0, 0)->text.t = "child";
+
+    auto html =
+        doc.root->grid->ConvertToText(doc.root->grid->SelectAll(), 0, A_EXPHTMLT, &doc, true,
+                                      doc.root.get());
+
+    CHECK(html.Find("class=\"ts-cell-with-children ts-collapsed\"") != wxNOT_FOUND);
+    CHECK(html.Find("tabindex=\"-1\"") != wxNOT_FOUND);
+    CHECK(html.Find("class=\"ts-fold-toggle\" aria-label=\"Toggle nested table\" "
+                    "aria-expanded=\"false\">+") != wxNOT_FOUND);
+    CHECK(html.Find("<div class=\"ts-child-grid\">") != wxNOT_FOUND);
+    CHECK(html.Find("child") != wxNOT_FOUND);
+
+    auto filename = TempName("treesheets-html-fold-test", ".html");
+    CHECK_EQ(doc.ExportFile(filename, A_EXPHTMLT, false), wxString("File exported successfully."));
+    auto page = ReadTextFile(filename);
+    CHECK(page.Find("td.ts-selected { outline: 2px solid rgba(50, 130, 255, 0.75);") !=
+          wxNOT_FOUND);
+    CHECK(page.Find("function tsSelectCell(cell)") != wxNOT_FOUND);
+    CHECK(page.Find("td.ts-collapsed > .ts-child-grid { display: none; }") != wxNOT_FOUND);
+    CHECK(page.Find("cell.classList.toggle('ts-collapsed', collapsed)") != wxNOT_FOUND);
+    CHECK(page.Find("document.addEventListener('wheel'") != wxNOT_FOUND);
+    CHECK(page.Find("document.addEventListener('keydown'") != wxNOT_FOUND);
+    CHECK(page.Find("event.ctrlKey") != wxNOT_FOUND);
+    CHECK(page.Find("event.shiftKey") != wxNOT_FOUND);
+    CHECK(page.Find("cell.querySelectorAll('td')") != wxNOT_FOUND);
+    CHECK(page.Find("child.style.fontSize = scale + 'em';") != wxNOT_FOUND);
+    CHECK(page.Find("case 'ArrowRight': handled = tsMoveGridCell(1, 0); break;") !=
+          wxNOT_FOUND);
+    CHECK(page.Find("case 'Tab': handled = tsMoveLinear(event.shiftKey ? -1 : 1); break;") !=
+          wxNOT_FOUND);
+    CHECK(page.Find("case 'Escape': handled = tsSelectParentCell(); break;") != wxNOT_FOUND);
+    CHECK(page.Find("case 'F10':") != wxNOT_FOUND);
+    CHECK(page.Find("tsResizeSelectedColumn(event.deltaY < 0 ? 1 : -1);") != wxNOT_FOUND);
+    CHECK(page.Find("<div id=\"ts-export-root\" class=\"ts-export-root\">") != wxNOT_FOUND);
+    RemoveIfExists(filename);
+}
+
 void TestHTMLExportEmbedsImagesAndNavigatesTextLinks() {
     treesheets::sys->imagelist.clear();
     treesheets::sys->loadimageids.clear();
@@ -599,7 +668,37 @@ void TestHTMLExportEmbedsImagesAndNavigatesTextLinks() {
 
     auto html = grid->ConvertToText(grid->SelectAll(), 0, A_EXPHTMLTI, &doc, true, doc.root.get());
     CHECK(html.Find("<img src=\"data:image/png;base64,") != wxNOT_FOUND);
+    CHECK(html.Find("class=\"ts-image-resizer\" style=\"width:48px;\"") != wxNOT_FOUND);
+    CHECK(html.Find(" class=\"ts-cell-image\" width=\"48\" height=\"48\" />") != wxNOT_FOUND);
+    CHECK(html.Find("class=\"ts-image-resize-handle\"") != wxNOT_FOUND);
     CHECK(html.Find("https://example.com") != wxNOT_FOUND);
+
+    auto html_with_images =
+        grid->ConvertToText(grid->SelectAll(), 0, A_EXPHTMLTE, &doc, true, doc.root.get());
+    CHECK(html_with_images.Find("<img src=\"data:image/png;base64,") != wxNOT_FOUND);
+    CHECK(html_with_images.Find("class=\"ts-image-resizer\" style=\"width:48px;\"") !=
+          wxNOT_FOUND);
+    CHECK(html_with_images.Find(" class=\"ts-cell-image\" width=\"48\" height=\"48\" />") !=
+          wxNOT_FOUND);
+    CHECK(html_with_images.Find(".png\"") == wxNOT_FOUND);
+    CHECK(html_with_images.Find("%\"") == wxNOT_FOUND);
+
+    auto filename = TempName("treesheets-html-embedded-image-test", ".html");
+    auto image_filename =
+        wxFileName(filename).GetPath(wxPATH_GET_VOLUME | wxPATH_GET_SEPARATOR) +
+        wxString::Format("%llu", right->text.image->hash) + right->text.image->GetFileExtension();
+    RemoveIfExists(image_filename);
+    CHECK_EQ(doc.ExportFile(filename, A_EXPHTMLTE, false), wxString("File exported successfully."));
+    auto page = ReadTextFile(filename);
+    CHECK(page.Find("<img src=\"data:image/png;base64,") != wxNOT_FOUND);
+    CHECK(page.Find(".ts-image-resizer { display: inline-block; position: relative;") !=
+          wxNOT_FOUND);
+    CHECK(page.Find(".ts-image-resize-handle") != wxNOT_FOUND);
+    CHECK(page.Find("width: 5px; height: 5px;") != wxNOT_FOUND);
+    CHECK(page.Find("document.addEventListener('pointerdown'") != wxNOT_FOUND);
+    CHECK(page.Find("box.style.width = width + 'px';") != wxNOT_FOUND);
+    CHECK(!wxFileExists(image_filename));
+    RemoveIfExists(filename);
 
     doc.SetSelect(grid->FindCell(left));
     CHECK_EQ(doc.Action(A_LINK), wxString(""));
@@ -882,6 +981,36 @@ void TestFoldActionsToggleNestedGrids() {
     CHECK(!second->grid->folded);
 }
 
+void TestNativeFoldToggleHotspotTogglesNestedGrid() {
+    treesheets::Document doc;
+    InitDocument(doc, MakeRoot(1, 1));
+    auto parent = doc.root->grid->C(0, 0).get();
+    parent->text.t = "Parent";
+    parent->AddGrid(1, 1);
+    parent->grid->C(0, 0)->text.t = "Child";
+
+    wxBitmap bitmap(400, 300, 24);
+    wxMemoryDC dc(bitmap);
+    doc.maxx = 400;
+    doc.maxy = 300;
+    doc.scrollx = doc.scrolly = 0;
+    doc.DrawView(dc);
+    dc.SelectObject(wxNullBitmap);
+
+    auto rect = doc.FoldToggleRect(parent);
+    CHECK(rect.width > 0);
+    CHECK(rect.height > 0);
+    wxPoint center(rect.x + rect.width / 2, rect.y + rect.height / 2);
+    CHECK_EQ(doc.FoldToggleCellAtDocumentPoint(center), parent);
+
+    CHECK(!doc.ToggleFoldCell(parent).IsEmpty());
+    CHECK(parent->grid->folded);
+    CHECK_EQ(doc.selected.GetCell(), parent);
+
+    CHECK(!doc.ToggleFoldCell(parent).IsEmpty());
+    CHECK(!parent->grid->folded);
+}
+
 void TestRenderStyleSingleChildSelectionDoesNotChangeParent() {
     treesheets::Document doc;
     InitDocument(doc, MakeRoot(1, 1));
@@ -1008,6 +1137,8 @@ int main() {
     RUN_DOCUMENT_TEST(TestPasteHTMLTablePreservesSpansTextAndStyles);
     RUN_DOCUMENT_TEST(TestPasteHTMLFixturesHandleNestedTablesRichStylesLinksAndImages);
     RUN_DOCUMENT_TEST(TestExportFormatsEscapeTextAndPreserveStyles);
+    RUN_DOCUMENT_TEST(TestHTMLExportPreservesCellLineBreaks);
+    RUN_DOCUMENT_TEST(TestHTMLExportAddsFoldControlsForNestedTables);
     RUN_DOCUMENT_TEST(TestHTMLExportEmbedsImagesAndNavigatesTextLinks);
     RUN_DOCUMENT_TEST(TestDeleteSelectedImageLeavesCellTextAndUndoRestoresImage);
     RUN_DOCUMENT_TEST(TestHierarchifyAndFlattenRoundTripTable);
@@ -1018,6 +1149,7 @@ int main() {
     RUN_DOCUMENT_TEST(TestDeleteThinRowSelectionRemovesRow);
     RUN_DOCUMENT_TEST(TestDeleteThinColumnSelectionRemovesColumn);
     RUN_DOCUMENT_TEST(TestFoldActionsToggleNestedGrids);
+    RUN_DOCUMENT_TEST(TestNativeFoldToggleHotspotTogglesNestedGrid);
     RUN_DOCUMENT_TEST(TestRenderStyleSingleChildSelectionDoesNotChangeParent);
     RUN_DOCUMENT_TEST(TestRenderStyleWholeGridSelectionStillChangesParentGridStyle);
     RUN_DOCUMENT_TEST(TestRenderStyleOneLayerOptionStopsAtSelectedCells);
